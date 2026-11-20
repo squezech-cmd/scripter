@@ -1,0 +1,49 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Package Windows x64 EXE
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build Windows x64 package
+        run: node scripts/build-exe.mjs --platform=win32 --arch=x64
+
+      - name: Zip the portable build
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "release\GUILTY AS SOCK - Scripter Edition-win32-x64\*" -DestinationPath "GUILTY-AS-SOCK-Scripter-Edition-Windows-x64.zip" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GUILTY-AS-SOCK-Scripter-Edition-Windows-x64
+          path: GUILTY-AS-SOCK-Scripter-Edition-Windows-x64.zip
+          retention-days: 30
+
+      - name: Attach EXE to GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ github.ref_name }}" "GUILTY-AS-SOCK-Scripter-Edition-Windows-x64.zip" --title "GUILTY AS SOCK! ${{ github.ref_name }} — Windows EXE" --notes-file RELEASE_NOTES.md --verify-tag

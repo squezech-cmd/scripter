@@ -47,6 +47,7 @@
     </div>
     <nav class="menu-nav">
       <button class="btn btn-primary btn-big" id="btnPlay">▶ &nbsp;ИГРАТЬ</button>
+      <button class="btn btn-gold" id="btnOnline">🌐 ИГРАТЬ С ДРУЗЬЯМИ <small>зал по коду — друзья с телефонов голосуют, кидают комки и пишут в чат</small></button>
       <button class="btn btn-gold" id="btnQuick">⚡ БЫСТРЫЙ СУД <small>случайное дело</small></button>
       <button class="btn" id="btnCustomize">🧦 МОЙ НОСОК <small>редактор 3D</small></button>
       <button class="btn" id="btnDecks">🃏 КОЛОДЫ ДОКАЗАТЕЛЬСТВ</button>
@@ -61,7 +62,7 @@
         <span>🎯 <b id="statScore">0</b> очков</span>
       </div>
       <p class="hint">WASD — движение • Мышь — обзор • E — действие • ЛКМ — бросок комка • Q — молоток судьи</p>
-      <p class="addon-note">✨ SCRIPTER ADDONS: Хаос-метр • Стример-режим • Бумажная физика • Дневное дело • Достижения • Редактор носка Pro</p>
+      <p class="addon-note">✨ SCRIPTER ADDONS 2.0: 🌐 Зал с друзьями по коду (голоса влияют на вердикт!) • Хаос-метр • Стример-режим • Бумажная физика • Дневное дело • Достижения • EXE для Windows</p>
     </div>
   </div>
 </div>
@@ -158,6 +159,35 @@
   </div>
 </div>
 
+<!-- ONLINE / FRIENDS -->
+<div id="onlineScreen" class="screen panel-screen">
+  <div class="panel">
+    <header><h2>🌐 ИГРАТЬ С ДРУЗЬЯМИ</h2><button class="btn-close" data-close="onlineScreen">✕</button></header>
+    <p class="panel-sub">Ты — хост на этом компьютере. Друзья заходят с телефонов или другого ПК по ссылке и коду зала: становятся онлайн-присяжными, голосуют «ВИНОВЕН / НЕВИНОВЕН», влияют на вердикт, кидают бумажные комки в ораторов и пишут в чат зала в реальном времени.</p>
+    <div id="onlineWarn" class="online-warn hidden">⚠️ Онлайн работает только при запуске через <b>npm start</b> или <b>EXE-версию</b> — не из двойного клика по файлу.</div>
+    <div class="online-block">
+      <button class="btn btn-primary btn-big" id="btnCreateRoom">🏛️ СОЗДАТЬ ЗАЛ</button>
+      <div id="roomInfo" class="hidden">
+        <div class="online-code-label">КОД ЗАЛА ДЛЯ ДРУЗЕЙ</div>
+        <div class="room-code" id="roomCode">ABCDE</div>
+        <div class="online-code-label">ССЫЛКА ДЛЯ ТЕЛЕФОНОВ / ПК</div>
+        <div class="room-url-row">
+          <code class="room-url" id="roomUrl">http://127.0.0.1:8080/juror.html</code>
+          <button class="btn btn-small" id="btnCopyUrl">📋 Копировать</button>
+        </div>
+        <p class="online-hint">Нужен тот же Wi-Fi. Через интернет: установите <b>Tailscale</b> у всех и откройте ссылку по Tailscale-адресу. Суд пошёл — все видят его у себя на экране.</p>
+        <div class="online-players-head">🧦 В зале (<b id="roomCount">1</b>):</div>
+        <div id="roomPlayers" class="room-players"></div>
+        <button class="btn" id="btnCloseRoom">🏳️ Закрыть зал</button>
+      </div>
+    </div>
+    <label class="online-toggle"><input type="checkbox" id="netVotesToggle" checked> Голоса друзей влияют на вердикт суда</label>
+    <div class="online-foot">
+      <button class="btn" data-close="onlineScreen">⬅ Назад в меню</button>
+    </div>
+  </div>
+</div>
+
 <!-- HOW TO PLAY -->
 <div id="howScreen" class="screen panel-screen">
   <div class="panel">
@@ -170,6 +200,7 @@
       <h3>📄 Хаос</h3><p>Кидай комки в говорящего — он отвлекается, убедительность падает, Хаос-метр растёт. При полном хаосе судья может выгнать всех!</p>
       <h3>🏆 Матч</h3><p>Матч — до 3 побед (Best of 5). После каждого дела — очки, достижения и новое дело.</p>
       <h3>✨ Наши добавки (Scripter Addons)</h3><p>Хаос-метр, стример-режим с чатом, физика комков, редактор носка Pro, колоды, дневное дело, достижения, мобильное управление.</p>
+      <h3>🌐 С друзьями онлайн</h3><p>Главное меню → «🌐 ИГРАТЬ С ДРУЗЬЯМИ» → «Создать зал». Отдай друзьям ссылку и код — они открывают её на телефоне или ПК и становятся <b>онлайн-присяжными</b>: голосуют за виновность, кидают бумажные комки в ораторов и пишут в чат. Их голоса учитываются в вердикте (можно отключить в том же окне). Телефон и ПК должны быть в одной Wi-Fi; через интернет — Tailscale у всех и та же ссылка по Tailscale-адресу. Быстрый способ: кнопка «Создать зал» показывает готовый код и ссылку сама.</p>
     </div>
   </div>
 </div>
@@ -283,9 +314,16 @@
 
   <!-- Streamer chat -->
   <div id="streamerChat" class="hidden">
-    <h4>🔴 ЧАТ СТРИМА</h4>
+    <h4 id="streamerChatTitle">🔴 ЧАТ СТРИМА</h4>
     <div id="chatLines"></div>
-    <div class="chat-vote">Чат: <b id="chatGuilty">0%</b> виновен • <b id="chatInnocent">0%</b> невиновен</div>
+    <div class="chat-vote"><span id="chatVoteLabel">Чат</span>: <b id="chatGuilty">0%</b> виновен • <b id="chatInnocent">0%</b> невиновен</div>
+  </div>
+
+  <!-- Online room badge (хост) -->
+  <div id="netBox" class="hidden">
+    <div class="netbox-code">🌐 <b id="netRoomCode">ABCDE</b></div>
+    <div class="netbox-row">друзей в зале: <b id="netPlayerCount">0</b></div>
+    <div class="netbox-row">голоса: 🔴 <b id="netVotesGuilty">0</b> • 🟢 <b id="netVotesInnocent">0</b></div>
   </div>
 
   <!-- Court log -->

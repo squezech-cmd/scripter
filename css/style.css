@@ -195,3 +195,29 @@ label small{text-transform:none;color:#aaa;font-weight:400}
   .ev-card b{font-size:9.5px}
   #handWrap{bottom:122px}
 }
+
+/* ONLINE / FRIENDS */
+.online-warn{background:rgba(230,57,70,.16);border:1px solid rgba(230,57,70,.5);color:#ffb3ba;border-radius:12px;padding:10px 12px;font-size:13px;margin-bottom:10px}
+.online-block{display:flex;flex-direction:column;gap:12px;align-items:stretch}
+.online-code-label{font-size:10px;letter-spacing:.18em;color:#b8b3d9;text-transform:uppercase;font-weight:800;margin-top:6px}
+.room-code{font-size:56px;font-weight:900;letter-spacing:.28em;text-align:center;color:var(--gold);background:#12101f;border:2px dashed rgba(245,197,66,.45);border-radius:16px;padding:10px 6px 10px 22px;text-shadow:0 4px 0 rgba(0,0,0,.5);user-select:all}
+.room-url-row{display:flex;gap:8px;align-items:center}
+.room-url{flex:1;background:#12101f;border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:12px 14px;font-size:14px;color:#9fe8de;overflow:auto;white-space:nowrap;user-select:all}
+.btn-small{padding:10px 12px;font-size:13px;text-align:center}
+.online-hint{font-size:12px;color:#9a95c2;line-height:1.5;margin:2px 2px 0}
+.online-hint b{color:#cfc9f5}
+.online-players-head{font-size:13px;color:var(--gold2);margin:8px 2px 0;font-weight:700}
+.room-players{display:flex;flex-wrap:wrap;gap:6px;min-height:36px;background:#12101f;border-radius:12px;padding:8px;border:1px solid rgba(255,255,255,.08)}
+.room-player{display:flex;align-items:center;gap:6px;background:#23203a;border-radius:99px;padding:6px 12px;font-size:13px;font-weight:700}
+.room-player small{color:#8f8ab0;font-weight:600}
+.room-player.host{border:1px solid var(--gold);color:var(--gold2)}
+.online-toggle{display:flex;align-items:center;gap:10px;margin:16px 2px 4px;font-size:14px;text-transform:none;letter-spacing:0;color:#e8e4ff;cursor:pointer}
+.online-toggle input{width:22px;height:22px;accent-color:var(--gold);cursor:pointer}
+.online-foot{margin-top:14px;display:flex;justify-content:flex-start}
+
+/* NET BOX (host HUD) */
+#netBox{position:fixed;right:12px;bottom:150px;z-index:11;background:rgba(10,9,20,.78);border:2px solid rgba(245,197,66,.5);border-radius:14px;padding:8px 12px;font-size:12px;color:#cfc9f5;backdrop-filter:blur(4px);min-width:170px}
+.netbox-code{font-size:13px;color:var(--gold2);letter-spacing:.12em;margin-bottom:3px}
+.netbox-code b{color:var(--gold);letter-spacing:.18em}
+.netbox-row{font-variant-numeric:tabular-nums}
+@media (max-width:700px){ #netBox{ bottom:110px; right:8px; font-size:11px; min-width:0; } .room-code{ font-size:40px; } }

@@ -9,6 +9,7 @@ import { createSock, animateSock, sockSay, sockGesture } from './sock.js';
 import { buildCourtroom, clearCourtroom } from './courtroom.js';
 import { drawHand, aiChooseCard, aiChooseStyle, persuasionScore, generatePresentLine, aiVote, generateHeadline, streamerVote } from './ai.js';
 import { sfx } from './audio.js';
+import { netSupported, isHosting, createRoom, sendState, leaveRoom, onPlayers, onChat, onBall, onVotes, onRoomClosed, currentRoom, currentPlayers, currentVotes, consumeBalls } from './net.js';
 
 // ---------- utils ----------
 const $ = id => document.getElementById(id);
@@ -45,7 +46,7 @@ if(!save.settings) save.settings = { volume:80, sens:5, quality:'medium', subtit
 
 // ---------- DOM ----------
 const canvas = $('gameCanvas');
-const screens = ['loadingScreen','mainMenu','customizeScreen','decksScreen','lobbyScreen','howScreen','settingsScreen','pauseScreen','verdictScreen','matchEndScreen'];
+const screens = ['loadingScreen','mainMenu','customizeScreen','decksScreen','lobbyScreen','onlineScreen','howScreen','settingsScreen','pauseScreen','verdictScreen','matchEndScreen'];
 function showScreen(id){
   screens.forEach(s=>$(s).classList.toggle('active', s===id));
   if(!id) screens.forEach(s=>$(s).classList.remove('active'));
@@ -68,6 +69,136 @@ function unlockAchievement(id){
   $('achievementToast').classList.remove('hidden');
   sfx.fanfare();
   setTimeout(()=>$('achievementToast').classList.add('hidden'), 3500);
+}
+
+// ---------- Online: зал с друзьями (host mode) ----------
+const netVotesEnabled = () => { const t = $('netVotesToggle'); return !t || t.checked; };
+let netBroadcastTimer = null;
+
+function netSnapshot(extra = {}){
+  const cd = gameState.caseData || {};
+  const cv = currentVotes();
+  return Object.assign({
+    caseNum: gameState.caseNum || 1,
+    caseTitle: cd.title || 'Дело носка',
+    crime: cd.crime || '', accused: cd.accused || '',
+    phase: gameState.phase, phaseLabel: ($('phaseChip')?.textContent) || '',
+    pros: Math.round(gameState.prosScore || 0),
+    def: Math.round(gameState.defScore || 0),
+    chaos: Math.round(gameState.chaos || 0),
+    matchWins: gameState.matchWins || 0,
+    matchLosses: gameState.matchLosses || 0,
+    votesGuilty: cv.guilty, votesInnocent: cv.innocent,
+    verdict: null, over: false,
+  }, extra);
+}
+function broadcastState(extra){
+  try { if(isHosting() && gameState.caseData) sendState(netSnapshot(extra)); } catch(e){ /* ignore */ }
+}
+function netFriendsCount(){
+  return currentPlayers().filter(p => !p.host).length;
+}
+function updateNetBox(){
+  const box = $('netBox'); if(!box) return;
+  const online = isHosting();
+  box.classList.toggle('hidden', !online);
+  if(!online) return;
+  $('netRoomCode').textContent = currentRoom() || '—';
+  $('netPlayerCount').textContent = netFriendsCount();
+  const cv = currentVotes();
+  $('netVotesGuilty').textContent = cv.guilty;
+  $('netVotesInnocent').textContent = cv.innocent;
+}
+function renderRoomPlayers(list){
+  const box = $('roomPlayers'); if(!box) return;
+  box.innerHTML = '';
+  for(const p of list){
+    const div = document.createElement('div');
+    div.className = 'room-player' + (p.host ? ' host' : '');
+    div.innerHTML = `<span>🧦</span><span></span><small></small>`;
+    div.children[1].textContent = p.name;
+    div.children[2].textContent = p.host ? 'хост' : 'присяжный';
+    box.appendChild(div);
+  }
+  const cnt = $('roomCount'); if(cnt) cnt.textContent = list.length;
+  updateNetBox();
+}
+function appendNetChat({ from, text, sys }){
+  // Дублируем реплики друзей в лог суда и в ленту чата зала
+  if(!sys) logCourt(`🌐 ${from}: ${String(text).slice(0,60)}`);
+  const lines = $('chatLines');
+  if(lines && !$('streamerChat').classList.contains('hidden')){
+    const div = document.createElement('div');
+    div.textContent = `💬 ${from}: ${text}`;
+    lines.appendChild(div);
+    while(lines.children.length > 7) lines.removeChild(lines.firstChild);
+  }
+}
+function initNet(){
+  onPlayers(list => renderRoomPlayers(list));
+  onChat(msg => appendNetChat(msg));
+  onBall(() => { /* шары забираются в animate() через consumeBalls() */ });
+  onVotes(() => {
+    updateNetBox();
+    const cv = currentVotes();
+    const tot = Math.max(1, cv.total);
+    if(isHosting()){
+      $('chatGuilty').textContent = Math.round(cv.guilty / tot * 100) + '%';
+      $('chatInnocent').textContent = Math.round(cv.innocent / tot * 100) + '%';
+    }
+  });
+  onRoomClosed(reason => {
+    toast('🌐 ' + reason);
+    $('netBox').classList.add('hidden');
+    resetRoomUI();
+  });
+  // Периодическая рассылка снимка суда (чтобы телефоны дружно жили)
+  netBroadcastTimer = setInterval(() => broadcastState(), 2000);
+}
+function resetRoomUI(){
+  leaveRoom();
+  $('roomInfo')?.classList.add('hidden');
+  $('btnCreateRoom')?.classList.remove('hidden');
+  $('netBox')?.classList.add('hidden');
+}
+function openOnlineScreen(){
+  showScreen('onlineScreen');
+  const warn = $('onlineWarn');
+  const ok = netSupported() && typeof location !== 'undefined' && !!location.host;
+  if(warn){
+    warn.classList.toggle('hidden', ok);
+    if(!ok) warn.innerHTML = '⚠️ Онлайн работает только при запуске через <b>npm start</b> или <b>EXE-версию</b> — не из двойного клика по файлу.';
+  }
+  $('btnCreateRoom')?.classList.toggle('hidden', isHosting());
+  $('roomInfo')?.classList.toggle('hidden', !isHosting());
+  if(isHosting()) fillRoomInfo(currentRoom());
+}
+async function fillRoomInfo(room){
+  $('roomCode').textContent = room || '—';
+  let url = `http://localhost:${location.port || 8080}/juror.html?room=${room}`;
+  try {
+    const info = await fetch('/api/info').then(r => r.json()).catch(() => null);
+    if(info && Array.isArray(info.ips) && info.ips.length){
+      url = `http://${info.ips[0]}:${info.port}/juror.html?room=${room}`;
+    }
+  } catch(e) { /* оставим localhost */ }
+  $('roomUrl').textContent = url;
+  renderRoomPlayers(currentPlayers());
+}
+function spawnNetBall(fromName){
+  const ball = paperBalls.find(b => !b.userData.active);
+  if(!ball) return;
+  ball.visible = true; ball.userData.active = true; ball.userData.fromPlayer = false; ball.userData.life = 7;
+  // Комок летит с трибуны (от друзей-присяжных) в выступающего
+  ball.position.set(rand(-8, 8), rand(3.6, 4.6), rand(4.5, 7.5));
+  const targetObj = (gameState.speaking && gameState.speaking.mesh) ? gameState.speaking.mesh : playerSock;
+  const target = targetObj ? targetObj.position.clone().add(new THREE.Vector3(0, 1.5, 0)) : new THREE.Vector3(0, 1.5, 0);
+  const dir = target.sub(ball.position).normalize();
+  ball.userData.vel.copy(dir.multiplyScalar(15.5));
+  ball.userData.vel.y += 1.2;
+  ball.userData.spin.set(rand(-9, 9), rand(-9, 9), rand(-9, 9));
+  sfx.paper();
+  logCourt(`🌐 ${fromName} кинул бумажный комок из зала!`);
 }
 
 // ---------- Three setup ----------
@@ -534,6 +665,7 @@ function playerPresent(){
 function setPhase(p, label){
   gameState.phase = p;
   $('phaseChip').textContent = label;
+  broadcastState();
 }
 async function runTrial(token){
   const cd = gameState.caseData;
@@ -657,6 +789,11 @@ async function runVoting(token){
     $('chatGuilty').textContent = sv.guilty+'%'; $('chatInnocent').textContent = sv.innocent+'%';
     streamerBias = (sv.guilty-50)/25;
     logCourt(`🔴 Чат: ${sv.guilty}% за «виновен»`);
+  } else if(isHosting()){
+    const cv = currentVotes();
+    const tot = Math.max(1, cv.total);
+    $('chatGuilty').textContent = Math.round(cv.guilty/tot*100)+'%';
+    $('chatInnocent').textContent = Math.round(cv.innocent/tot*100)+'%';
   }
   // Jurors vote
   const jurors = aiSocks.filter(s=>s.role==='juror');
@@ -680,6 +817,27 @@ async function runVoting(token){
       const v = aiVote(gameState.prosScore, gameState.defScore, j.charisma, gameState.chaos, streamerBias);
       gameState.votes.push({ name:j.name, guilty:v });
       await sleep(400);
+    }
+  }
+  // Онлайн-присяжные: ждём голоса друзей до 8 секунд (или пока все не проголосуют)
+  if(isHosting()){
+    const friends = netFriendsCount();
+    if(friends > 0){
+      toast('🌐 Ждём голоса друзей… (до 8 сек)');
+      broadcastState();
+      const t0 = Date.now();
+      while(Date.now() - t0 < 8000){
+        if(!alive()) return;
+        if(currentVotes().total >= friends) break;
+        await sleep(300);
+      }
+      if(netVotesEnabled()){
+        const cv = currentVotes();
+        for(const v of cv.voters) gameState.votes.push({ name:'🌐 ' + v.name, guilty: !!v.guilty, net: true });
+        if(cv.total) logCourt(`🌐 Онлайн-голоса: виновен ${cv.guilty} • невиновен ${cv.innocent}`);
+      } else if(currentVotes().total){
+        logCourt('🌐 Голоса друзей не учитываются (отключено в окне «ИГРАТЬ С ДРУЗЬЯМИ»)');
+      }
     }
   }
   if(gameState.votes.length===0){
@@ -739,6 +897,7 @@ async function showVerdict(guilty, token){
   document.exitPointerLock?.();
   showScreen('verdictScreen');
   gameState.phase='verdict';
+  broadcastState({ verdict: guilty ? 'guilty' : 'innocent' });
 
   // Match end?
   if(gameState.matchWins>=3 || gameState.matchLosses>=3){
@@ -812,11 +971,17 @@ function nextCase(quick=false){
   showScreen(null);
   updateHudScore();
   logCourt(`📁 Новое дело: ${cd.title}`);
-  if(gameState.streamer){
+  const online = isHosting();
+  if(gameState.streamer || online){
     $('streamerChat').classList.remove('hidden');
-    if(save.achievements && !save.achievements.streamer) unlockAchievement('streamer');
-    startChatSim();
+    $('streamerChatTitle').textContent = online ? '🌐 ЗАЛ В ЭФИРЕ — ЧАТ ДРУЗЕЙ' : '🔴 ЧАТ СТРИМА';
+    $('chatVoteLabel').textContent = online ? 'Зал' : 'Чат';
+    if(gameState.streamer && save.achievements && !save.achievements.streamer) unlockAchievement('streamer');
+    if(gameState.streamer) startChatSim(); else clearInterval(chatInterval);
+    if(online) logCourt(`🌐 Зал онлайн: код ${currentRoom()} — друзья уже видят суд!`);
   } else $('streamerChat').classList.add('hidden');
+  updateNetBox();
+  broadcastState();
   // Lock pointer on user gesture chain (button click) — request lock
   setTimeout(()=>{ requestLock(); }, 200);
   runTrial(token).catch(e=>{ if(!(e instanceof TrialEnd)) console.error(e); });
@@ -981,6 +1146,9 @@ function animate(){
     }
   }
 
+  if(isHosting()){
+    for(const ev of consumeBalls()) spawnNetBall(ev.from);
+  }
   updatePaper(dt);
   updateConfetti(dt);
   updateAiWander(dt);
@@ -1035,11 +1203,41 @@ function initUI(){
 
   // Menu buttons
   $('btnPlay').addEventListener('click', ()=>{ sfx.click(); openLobby(); });
+  $('btnOnline').addEventListener('click', ()=>{ sfx.click(); openOnlineScreen(); });
   $('btnQuick').addEventListener('click', ()=>{ sfx.click(); startMatch(true); });
   $('btnCustomize').addEventListener('click', ()=>{ sfx.click(); showScreen('customizeScreen'); refreshCustomizeUI(); });
   $('btnDecks').addEventListener('click', ()=>{ sfx.click(); showScreen('decksScreen'); renderDecks(); });
   $('btnHow').addEventListener('click', ()=>{ sfx.click(); showScreen('howScreen'); });
   $('btnSettings').addEventListener('click', ()=>{ sfx.click(); showScreen('settingsScreen'); refreshSettingsUI(); });
+  // Online screen
+  $('btnCreateRoom').addEventListener('click', async ()=>{
+    sfx.click();
+    const btn = $('btnCreateRoom');
+    btn.disabled = true; btn.textContent = '🏛️ Создаём зал…';
+    const res = await createRoom(save.sock.name || 'Хост');
+    btn.disabled = false; btn.textContent = '🏛️ СОЗДАТЬ ЗАЛ';
+    if(!res.ok){
+      const warn = $('onlineWarn'); warn.classList.remove('hidden'); warn.textContent = '⚠️ ' + res.error;
+      return;
+    }
+    $('btnCreateRoom').classList.add('hidden');
+    $('roomInfo').classList.remove('hidden');
+    sfx.fanfare();
+    fillRoomInfo(res.room);
+    updateNetBox();
+    toast('🌐 Зал создан! Отправь друзьям ссылку и код.');
+  });
+  $('btnCopyUrl').addEventListener('click', async ()=>{
+    const url = $('roomUrl').textContent.trim();
+    try { await navigator.clipboard.writeText(url); toast('📋 Ссылка скопирована!'); }
+    catch(e){
+      const ta = document.createElement('textarea'); ta.value = url; document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); toast('📋 Ссылка скопирована!'); } catch(e2){ toast('Выдели ссылку и скопируй вручную'); }
+      ta.remove();
+    }
+  });
+  $('btnCloseRoom').addEventListener('click', ()=>{ sfx.click(); resetRoomUI(); toast('🏳️ Зал закрыт'); });
   document.querySelectorAll('.btn-close').forEach(b=>b.addEventListener('click', ()=>{
     sfx.click();
     if(returnToPause && gameState.phase!=='menu' && gameState.phase!=='verdict'){ returnToPause=false; showScreen('pauseScreen'); }
@@ -1148,6 +1346,7 @@ function quitToMenu(){
   playerSock.position.set(0,0,6); player.pos.set(0,1.7,8);
   showScreen('mainMenu'); updateHudScore();
   document.exitPointerLock?.();
+  broadcastState({ verdict: null, over: false });
 }
 function showMatchEnd(){
   const won = gameState.matchWins>=3;
@@ -1161,6 +1360,7 @@ function showMatchEnd(){
     <div><b>${save.wins}</b>Побед</div>
     <div><b>${save.cases}</b>Дел сыграно</div>`;
   showScreen('matchEndScreen');
+  broadcastState({ over: true, verdict: won ? 'guilty' : 'innocent' });
   if(won){ sfx.fanfare(); spawnConfetti(); }
 }
 
@@ -1252,6 +1452,7 @@ try{
   initInput();
   initTouch();
   initUI();
+  initNet();
 }catch(err){
   console.error(err);
   $('loadText').textContent = 'Ошибка загрузки: ' + err.message + ' — проверь интернет (нужен CDN Three.js)';
