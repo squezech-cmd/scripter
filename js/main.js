@@ -84,6 +84,8 @@ let gameState = {
   playerRole:'defense', deck:'classic', streamer:false, headlinesLeft:3,
   votes:[], paused:false, freeRoam:false, speaking:null, paperHits:0, objections:0, presented:0,
 };
+let shakeAmt = 0;
+function addShake(v){ shakeAmt = Math.min(0.55, shakeAmt + v); }
 const player = {
   pos: new THREE.Vector3(0,1.7,8), vel: new THREE.Vector3(), yaw:0, pitch:0,
   onGround:true, keys:{}, locked:false,
@@ -198,6 +200,7 @@ function updatePaper(dt){
         b.userData.active=false; b.visible=false;
         sfx.paperHit();
         addChaos(5);
+        if(!b.userData.fromPlayer) addShake(0.12);
         if(b.userData.fromPlayer){
           gameState.paperHits++;
           if(gameState.paperHits>=10) unlockAchievement('paper_master');
@@ -452,13 +455,17 @@ function doObjection(){
   $('objectionFlash').classList.remove('hidden');
   setTimeout(()=>$('objectionFlash').classList.add('hidden'), 900);
   sfx.objection(); addChaos(3);
+  addShake(0.14);
+  const flash = $('damageFlash');
+  flash.style.opacity = '0.55';
+  setTimeout(()=>{ flash.style.opacity = '0'; }, 180);
   const me = aiSocks.find(s=>s.isPlayer);
   if(me) speakBy(me, pick(LINES.objection), 1800, '✋ Возражение!');
   save.score += 15; storeSave(); updateHudScore();
 }
 function doGavel(){
   if(gameState.playerRole!=='judge') return;
-  sfx.gavel(); addChaos(-12);
+  sfx.gavel(); addChaos(-12); addShake(0.18);
   toast('🔨 Молоток! Порядок восстановлен.');
   logCourt('🔨 Судья стучит молотком!');
   if(gameState.chaos<20) save.score+=10, storeSave(), updateHudScore();
@@ -966,6 +973,12 @@ function animate(){
   } else {
     playerSock.visible = false;
     updatePlayer(dt);
+    if(shakeAmt > 0.002){
+      camera.position.x += rand(-1,1)*shakeAmt;
+      camera.position.y += rand(-1,1)*shakeAmt*0.7;
+      camera.rotation.z = rand(-1,1)*shakeAmt*0.12;
+      shakeAmt *= Math.pow(0.015, dt);
+    }
   }
 
   updatePaper(dt);
