@@ -106,7 +106,7 @@ export function createSock(config = {}){
     const p = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), pupilMat);
     p.position.set(0, 0.02, 0.10);
     eg.add(w, p);
-    eg.position.set(side*0.16, 1.78, 0.30);
+    eg.position.set(side*0.16, 1.78, 0.35);
     group.add(eg); eyes.push(eg);
   }
 
@@ -119,7 +119,7 @@ export function createSock(config = {}){
     new THREE.MeshStandardMaterial({ color:0x7a1f2b, roughness:0.9 }));
   mouthInner.position.z = -0.02; mouthInner.scale.set(1,0.6,0.5);
   mouthGroup.add(mouthInner);
-  mouthGroup.position.set(0, 1.52, 0.36);
+  mouthGroup.position.set(0, 1.52, 0.38);
   group.add(mouthGroup);
 
   // Arms
@@ -153,7 +153,7 @@ export function createSock(config = {}){
 
   // Role badge (floating label handled separately, but add colored scarf)
   const roleColors = { judge:0x222222, prosecutor:0x4361ee, defense:0x2ec4b6, witness:0xf5c542, juror:0x9a95c2, journalist:0xe63946, bailiff:0x7209b7 };
-  const scarf = new THREE.Mesh(new THREE.TorusGeometry(0.30, 0.07, 8, 18),
+  const scarf = new THREE.Mesh(new THREE.TorusGeometry(0.40, 0.075, 8, 20),
     new THREE.MeshStandardMaterial({ color: roleColors[role] ?? 0xffffff, roughness:0.8 }));
   scarf.position.y = 1.92; scarf.rotation.x = Math.PI/2;
   group.add(scarf);
@@ -169,10 +169,10 @@ function addAccessory(group, acc, bodyMat){
     const mat = new THREE.MeshStandardMaterial({ color:0x111111, roughness:0.3, metalness:0.4 });
     for(const side of [-1,1]){
       const lens = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.02, 8, 16), mat);
-      lens.position.set(side*0.16, 1.78, 0.44); group.add(lens);
+      lens.position.set(side*0.16, 1.78, 0.47); group.add(lens);
     }
     const bridge = new THREE.Mesh(new THREE.CylinderGeometry(0.015,0.015,0.14,6), mat);
-    bridge.rotation.z = Math.PI/2; bridge.position.set(0,1.78,0.44); group.add(bridge);
+    bridge.rotation.z = Math.PI/2; bridge.position.set(0,1.78,0.47); group.add(bridge);
   } else if(acc === 'wig'){
     const wig = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 12, 0, Math.PI*2, 0, Math.PI*0.55),
       new THREE.MeshStandardMaterial({ color:0xf5f5f5, roughness:1 }));
@@ -200,7 +200,7 @@ function addAccessory(group, acc, bodyMat){
     const m = new THREE.MeshStandardMaterial({ color:0x3a2a1a, roughness:1 });
     for(const side of [-1,1]){
       const w = new THREE.Mesh(new THREE.SphereGeometry(0.12,10,8), m);
-      w.scale.set(1.6,0.5,0.6); w.position.set(side*0.10, 1.44, 0.40); w.rotation.z = side*0.3; group.add(w);
+      w.scale.set(1.6,0.5,0.6); w.position.set(side*0.10, 1.44, 0.43); w.rotation.z = side*0.3; group.add(w);
     }
   } else if(acc === 'crown'){
     const gold = new THREE.MeshStandardMaterial({ color:0xf5c542, roughness:0.25, metalness:0.8 });
