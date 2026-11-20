@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>GUILTY AS SOCK! — 3D Суд Носков | Scripter Edition</title>
+<meta name="description" content="Крутейшая 3D игра-копия Guilty as Sock! Суд носков: судья, прокурор, адвокат, свидетели, доказательства, бумажные комки и хаос. Играется в браузере, без приложения.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧦</text></svg>">
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js"
+  }
+}
+</script>
+</head>
+<body>
+
+<!-- 3D CANVAS -->
+<canvas id="gameCanvas"></canvas>
+<div id="vignette"></div>
+<div id="damageFlash"></div>
+
+<!-- LOADING -->
+<div id="loadingScreen" class="screen active">
+  <div class="load-box">
+    <div class="load-sock">🧦</div>
+    <h1>GUILTY <span>AS</span> SOCK!</h1>
+    <p class="load-sub">SCRIPTER EDITION • 3D СУД НОСКОВ</p>
+    <div class="load-bar"><div id="loadFill"></div></div>
+    <p id="loadText">Загружаем зал суда…</p>
+  </div>
+</div>
+
+<!-- MAIN MENU -->
+<div id="mainMenu" class="screen">
+  <div class="menu-bg"></div>
+  <div class="menu-content">
+    <div class="logo">
+      <div class="logo-sock">🧦</div>
+      <h1>GUILTY <em>AS</em> SOCK!</h1>
+      <p class="tagline">Суд. Хаос. Носки. Справедливость никогда не была такой безумной.</p>
+      <div class="logo-badges">
+        <span>⚖️ 3D СУД</span><span>🧦 7 РОЛЕЙ</span><span>🃏 КАРТЫ-ДОКАЗАТЕЛЬСТВА</span><span>📄 БУМАЖНЫЕ КОМКИ</span><span>🔨 МОЛОТОК</span>
+      </div>
+    </div>
+    <nav class="menu-nav">
+      <button class="btn btn-primary btn-big" id="btnPlay">▶ &nbsp;ИГРАТЬ</button>
+      <button class="btn btn-gold" id="btnQuick">⚡ БЫСТРЫЙ СУД <small>случайное дело</small></button>
+      <button class="btn" id="btnCustomize">🧦 МОЙ НОСОК <small>редактор 3D</small></button>
+      <button class="btn" id="btnDecks">🃏 КОЛОДЫ ДОКАЗАТЕЛЬСТВ</button>
+      <button class="btn" id="btnHow">❓ КАК ИГРАТЬ</button>
+      <button class="btn" id="btnSettings">⚙️ НАСТРОЙКИ</button>
+    </nav>
+    <div class="menu-footer">
+      <div class="profile-chip" id="profileChip">🧦 Игрок • Уровень 1 • 0 побед</div>
+      <div class="menu-stats">
+        <span>🏆 <b id="statWins">0</b> побед</span>
+        <span>⚖️ <b id="statCases">0</b> дел</span>
+        <span>🎯 <b id="statScore">0</b> очков</span>
+      </div>
+      <p class="hint">WASD — движение • Мышь — обзор • E — действие • ЛКМ — бросок комка • Q — молоток судьи</p>
+      <p class="addon-note">✨ SCRIPTER ADDONS: Хаос-метр • Стример-режим • Бумажная физика • Дневное дело • Достижения • Редактор носка Pro</p>
+    </div>
+  </div>
+</div>
+
+<!-- CUSTOMIZE -->
+<div id="customizeScreen" class="screen panel-screen">
+  <div class="panel">
+    <header><h2>🧦 МОЙ НОСОК</h2><button class="btn-close" data-close="customizeScreen">✕</button></header>
+    <p class="panel-sub">Крути мышью — носок в зале суда. Выбери цвет, узор, аксессуар и костюм. Это влияет на харизму в суде!</p>
+    <div class="custom-grid">
+      <div class="custom-preview-note">👆 3D-превью — за тобой в зале суда</div>
+      <div class="custom-controls">
+        <label>Цвет носка</label>
+        <div class="swatches" id="colorSwatches"></div>
+        <label>Узор</label>
+        <div class="opt-row" id="patternRow">
+          <button data-pattern="plain" class="opt active">Однотон</button>
+          <button data-pattern="stripes" class="opt">Полоски</button>
+          <button data-pattern="dots" class="opt">Горошек</button>
+          <button data-pattern="checker" class="opt">Клетка</button>
+          <button data-pattern="flame" class="opt">Пламя 🔥</button>
+        </div>
+        <label>Аксессуар</label>
+        <div class="opt-row" id="accessoryRow">
+          <button data-acc="none" class="opt active">Без</button>
+          <button data-acc="glasses" class="opt">👓 Очки</button>
+          <button data-acc="wig" class="opt">👨‍⚖️ Парик судьи</button>
+          <button data-acc="hat" class="opt">🎩 Цилиндр</button>
+          <button data-acc="bowtie" class="opt">🎀 Бабочка</button>
+          <button data-acc="mustache" class="opt">🥸 Усы</button>
+          <button data-acc="crown" class="opt">👑 Корона</button>
+          <button data-acc="horns" class="opt">😈 Рога</button>
+        </div>
+        <label>Костюм / Роль-стиль</label>
+        <div class="opt-row" id="costumeRow">
+          <button data-costume="casual" class="opt active">👕 Обычный</button>
+          <button data-costume="judge" class="opt">⚖️ Судья</button>
+          <button data-costume="lawyer" class="opt">🤵 Адвокат</button>
+          <button data-costume="punk" class="opt">🎸 Панк</button>
+          <button data-costume="royal" class="opt">👑 Королевский</button>
+        </div>
+        <label>Имя носка</label>
+        <input id="sockNameInput" maxlength="16" value="Сэр Носок" class="text-input">
+        <label>Харизма: <b id="charismaVal">5</b>/10 <small>(влияет на присяжных)</small></label>
+        <input type="range" id="charismaRange" min="1" max="10" value="5">
+        <button class="btn btn-primary" id="btnSaveSock">💾 СОХРАНИТЬ НОСКА</button>
+        <button class="btn" id="btnRandomSock">🎲 СЛУЧАЙНЫЙ НОСОК</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DECKS -->
+<div id="decksScreen" class="screen panel-screen">
+  <div class="panel">
+    <header><h2>🃏 КОЛОДЫ ДОКАЗАТЕЛЬСТВ</h2><button class="btn-close" data-close="decksScreen">✕</button></header>
+    <p class="panel-sub">Выбери колоду на матч. Каждая даёт бонус к определённому стилю аргументации.</p>
+    <div class="deck-grid" id="deckGrid"></div>
+  </div>
+</div>
+
+<!-- LOBBY -->
+<div id="lobbyScreen" class="screen panel-screen">
+  <div class="panel panel-wide">
+    <header><h2>🏛️ ЗАЛ СУДА — ЛОББИ</h2><button class="btn-close" data-close="lobbyScreen">✕</button></header>
+    <div class="lobby-grid">
+      <div>
+        <label>Твоя роль</label>
+        <div class="role-grid" id="roleGrid"></div>
+        <label>Тема зала суда</label>
+        <div class="opt-row" id="themeRow">
+          <button data-theme="classic" class="opt active">🏛️ Классика</button>
+          <button data-theme="neon" class="opt">🌃 Неон-сити</button>
+          <button data-theme="medieval" class="opt">🏰 Средневековье</button>
+          <button data-theme="candy" class="opt">🍭 Конфетный</button>
+        </div>
+        <label>Колода</label>
+        <div class="opt-row" id="lobbyDeckRow"></div>
+        <label>Число ИИ-носков: <b id="aiCountVal">5</b></label>
+        <input type="range" id="aiCountRange" min="3" max="8" value="5">
+        <label>Режим стримера <small>(чат голосует)</small></label>
+        <div class="opt-row" id="streamerRow">
+          <button data-streamer="off" class="opt active">Выкл</button>
+          <button data-streamer="on" class="opt">🔴 Вкл</button>
+        </div>
+        <button class="btn btn-primary btn-big" id="btnStartTrial">⚖️ НАЧАТЬ СУД</button>
+      </div>
+      <div class="lobby-players">
+        <h3>Участники суда</h3>
+        <div id="lobbyPlayers"></div>
+        <div class="lobby-note">ИИ-носки займут остальные роли: судья, прокурор, адвокат, свидетель, присяжные, журналист, пристав.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- HOW TO PLAY -->
+<div id="howScreen" class="screen panel-screen">
+  <div class="panel">
+    <header><h2>❓ КАК ИГРАТЬ</h2><button class="btn-close" data-close="howScreen">✕</button></header>
+    <div class="how-content">
+      <h3>🎯 Цель</h3><p>Выиграй суд: убеди присяжных. Если ты прокурор — докажи вину. Если адвокат — докажи невиновность. Если судья — вынеси вердикт. Если присяжный — голосуй сердцем (и картами).</p>
+      <h3>🕹️ Управление</h3>
+      <p><b>WASD</b> — ходить • <b>Мышь</b> — смотреть • <b>Shift</b> — бежать • <b>Пробел</b> — прыжок • <b>E</b> — действие / говорить • <b>ЛКМ</b> — бросить бумажный комок • <b>Q</b> — молоток (судья) • <b>R</b> — возражение! • <b>Esc</b> — пауза</p>
+      <h3>🃏 Доказательства</h3><p>У тебя рука из 5 карт. Выбирай карту + стиль: <b>Логика 📐</b>, <b>Эмоции ❤️</b>, <b>Хаос 🎪</b>, <b>Подкуп 💸</b>. Карта + стиль = убедительность. Присяжные голосуют по сумме убедительности + харизме + хаосу.</p>
+      <h3>📄 Хаос</h3><p>Кидай комки в говорящего — он отвлекается, убедительность падает, Хаос-метр растёт. При полном хаосе судья может выгнать всех!</p>
+      <h3>🏆 Матч</h3><p>Матч — до 3 побед (Best of 5). После каждого дела — очки, достижения и новое дело.</p>
+      <h3>✨ Наши добавки (Scripter Addons)</h3><p>Хаос-метр, стример-режим с чатом, физика комков, редактор носка Pro, колоды, дневное дело, достижения, мобильное управление.</p>
+    </div>
+  </div>
+</div>
+
+<!-- SETTINGS -->
+<div id="settingsScreen" class="screen panel-screen">
+  <div class="panel">
+    <header><h2>⚙️ НАСТРОЙКИ</h2><button class="btn-close" data-close="settingsScreen">✕</button></header>
+    <label>Громкость</label><input type="range" id="volRange" min="0" max="100" value="80">
+    <label>Чувствительность мыши</label><input type="range" id="sensRange" min="1" max="10" value="5">
+    <label>Качество графики</label>
+    <div class="opt-row" id="qualityRow">
+      <button data-q="low" class="opt">Низкое</button>
+      <button data-q="medium" class="opt active">Среднее</button>
+      <button data-q="high" class="opt">Высокое</button>
+    </div>
+    <label>Субтитры ИИ</label>
+    <div class="opt-row" id="subtitleRow">
+      <button data-sub="on" class="opt active">Вкл</button>
+      <button data-sub="off" class="opt">Выкл</button>
+    </div>
+    <button class="btn btn-primary" id="btnApplySettings">ПРИМЕНИТЬ</button>
+    <button class="btn" id="btnResetProgress">🗑️ СБРОСИТЬ ПРОГРЕСС</button>
+  </div>
+</div>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div id="topBar">
+    <div class="top-left">
+      <div class="case-chip" id="caseChip">⚖️ Дело №1</div>
+      <div class="phase-chip" id="phaseChip">Открытие</div>
+    </div>
+    <div class="top-center">
+      <div id="chaosWrap"><span>🎪 ХАОС</span><div class="chaos-bar"><div id="chaosFill"></div></div><b id="chaosVal">0%</b></div>
+      <div id="timerChip">⏱️ 0:00</div>
+    </div>
+    <div class="top-right">
+      <div class="score-chip">⭐ <b id="hudScore">0</b></div>
+      <div class="score-chip">🏆 <b id="hudWins">0</b>–<b id="hudLosses">0</b></div>
+      <button id="btnPauseHud" class="icon-btn">⏸</button>
+    </div>
+  </div>
+
+  <div id="crosshair">+</div>
+  <div id="interactHint" class="hidden">E — говорить</div>
+  <div id="paperCount">📄 Комков: <b id="paperVal">5</b></div>
+
+  <!-- Speech / subtitles -->
+  <div id="speechBox" class="hidden">
+    <div class="speech-name" id="speechName">Судья</div>
+    <div class="speech-text" id="speechText">…</div>
+    <div class="speech-style" id="speechStyle"></div>
+  </div>
+
+  <!-- Case file -->
+  <div id="caseFile">
+    <h4>📁 ДЕЛО</h4>
+    <div id="caseTitle">—</div>
+    <div id="caseDesc">—</div>
+    <div id="caseMeta"></div>
+  </div>
+
+  <!-- Evidence hand -->
+  <div id="handWrap">
+    <div class="hand-head"><span>🃏 ТВОИ ДОКАЗАТЕЛЬСТВА</span><span id="handHint">Выбери карту, затем стиль</span></div>
+    <div id="hand"></div>
+    <div id="styleRow">
+      <button class="style-btn" data-style="logic">📐 Логика</button>
+      <button class="style-btn" data-style="emotion">❤️ Эмоции</button>
+      <button class="style-btn" data-style="chaos">🎪 Хаос</button>
+      <button class="style-btn" data-style="bribe">💸 Подкуп</button>
+      <button class="style-btn style-go" id="btnPresent">⚖️ ПРЕДЪЯВИТЬ</button>
+    </div>
+  </div>
+
+  <!-- Judge panel -->
+  <div id="judgePanel" class="hidden">
+    <h4>⚖️ ПАНЕЛЬ СУДЬИ</h4>
+    <button id="btnGavel">🔨 Стукнуть молотком (Q)</button>
+    <button id="btnGiveFloor">🎤 Дать слово</button>
+    <button id="btnMute">🔇 Заглушить</button>
+    <button id="btnVerdict">🏁 Вердикт</button>
+  </div>
+
+  <!-- Juror panel -->
+  <div id="jurorPanel" class="hidden">
+    <h4>🗳️ ГОЛОСОВАНИЕ ПРИСЯЖНЫХ</h4>
+    <button id="btnVoteGuilty" class="vote-guilty">ВИНОВЕН</button>
+    <button id="btnVoteInnocent" class="vote-innocent">НЕВИНОВЕН</button>
+  </div>
+
+  <!-- Journalist panel -->
+  <div id="journalistPanel" class="hidden">
+    <h4>📰 ПУБЛИКАЦИЯ (3 на суд)</h4>
+    <div id="headlineOptions"></div>
+  </div>
+
+  <!-- Witness panel -->
+  <div id="witnessPanel" class="hidden">
+    <h4>👁️ ПОКАЗАНИЯ</h4>
+    <div id="witnessOptions"></div>
+  </div>
+
+  <!-- Bailiff panel -->
+  <div id="bailiffPanel" class="hidden">
+    <h4>🛡️ ПРИСТАВ</h4>
+    <button id="btnOrder">📢 Порядок в зале!</button>
+    <button id="btnEscort">🚪 Выгнать хаотика</button>
+  </div>
+
+  <!-- Streamer chat -->
+  <div id="streamerChat" class="hidden">
+    <h4>🔴 ЧАТ СТРИМА</h4>
+    <div id="chatLines"></div>
+    <div class="chat-vote">Чат: <b id="chatGuilty">0%</b> виновен • <b id="chatInnocent">0%</b> невиновен</div>
+  </div>
+
+  <!-- Court log -->
+  <div id="courtLog"></div>
+
+  <!-- Mobile controls -->
+  <div id="touchControls" class="hidden">
+    <div id="joystick"><div id="joystickKnob"></div></div>
+    <div class="touch-btns">
+      <button id="tInteract">E</button>
+      <button id="tThrow">📄</button>
+      <button id="tJump">⬆</button>
+      <button id="tObjection">!</button>
+    </div>
+  </div>
+
+  <div id="objectionFlash" class="hidden">ВОЗРАЖЕНИЕ! ✋</div>
+  <div id="centerToast" class="hidden"></div>
+</div>
+
+<!-- PAUSE -->
+<div id="pauseScreen" class="screen panel-screen">
+  <div class="panel panel-small">
+    <h2>⏸️ ПАУЗА</h2>
+    <button class="btn btn-primary" id="btnResume">▶ ПРОДОЛЖИТЬ</button>
+    <button class="btn" id="btnRestartCase">🔄 ЗАНОВО ДЕЛО</button>
+    <button class="btn" id="btnQuitToMenu">🏠 В МЕНЮ</button>
+    <button class="btn" id="btnHowPause">❓ КАК ИГРАТЬ</button>
+  </div>
+</div>
+
+<!-- VERDICT -->
+<div id="verdictScreen" class="screen">
+  <div class="verdict-box">
+    <div class="verdict-stamp" id="verdictStamp">ВИНОВЕН</div>
+    <h2 id="verdictTitle">Вердикт вынесен!</h2>
+    <p id="verdictText"></p>
+    <div class="verdict-stats" id="verdictStats"></div>
+    <div class="verdict-votes" id="verdictVotes"></div>
+    <button class="btn btn-primary btn-big" id="btnNextCase">➡️ СЛЕДУЮЩЕЕ ДЕЛО</button>
+    <button class="btn" id="btnVerdictMenu">🏠 В МЕНЮ</button>
+  </div>
+</div>
+
+<!-- MATCH END -->
+<div id="matchEndScreen" class="screen">
+  <div class="verdict-box">
+    <div class="verdict-stamp gold" id="matchStamp">ПОБЕДА!</div>
+    <h2 id="matchTitle">Матч окончен</h2>
+    <p id="matchText"></p>
+    <div class="verdict-stats" id="matchStats"></div>
+    <button class="btn btn-primary btn-big" id="btnPlayAgain">🔄 ИГРАТЬ ЕЩЁ</button>
+    <button class="btn" id="btnMatchMenu">🏠 В МЕНЮ</button>
+  </div>
+</div>
+
+<!-- ACHIEVEMENT TOAST -->
+<div id="achievementToast" class="hidden">
+  <span>🏆</span><div><b id="achTitle">Достижение</b><small id="achDesc"></small></div>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
