@@ -1,37 +1,32 @@
-// Tiny static server for local play: `npm start` → http://localhost:8080
-// No dependencies, binds 0.0.0.0 so it also works inside containers/previews.
-import http from 'node:http';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+// 🧦 GUILTY AS SOCK! — Scripter Edition
+// Локальный запуск: `npm start` → https://localhost:8080
+// HTTPS нужен для голосового чата (браузеры дают микрофон только в защищённом контексте).
+// Если что-то не так с сертификатом: GAS_HTTP=1 npm start  (но войса на Wi-Fi не будет)
+import { createGameServer, lanIPs } from '../server/room-server.mjs';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = Number(process.env.PORT || 8080);
+const port = Number(process.env.GAS_PORT || process.env.PORT || 8080);
 
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js':   'text/javascript; charset=utf-8',
-  '.mjs':  'text/javascript; charset=utf-8',
-  '.css':  'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg':  'image/svg+xml',
-  '.png':  'image/png',
-  '.jpg':  'image/jpeg',
-  '.ico':  'image/x-icon',
-  '.woff2':'font/woff2',
-};
-
-http.createServer((req, res) => {
-  const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
-  let file = path.join(root, urlPath === '/' ? 'index.html' : urlPath);
-  if(!file.startsWith(root)) { res.writeHead(403); return res.end('forbidden'); }
-  if(fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
-  if(!fs.existsSync(file)) { res.writeHead(404); return res.end('not found'); }
-  res.writeHead(200, {
-    'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
-    'Cache-Control': 'no-cache',
-  });
-  fs.createReadStream(file).pipe(res);
-}).listen(port, '0.0.0.0', () => {
-  console.log(`🧦 GUILTY AS SOCK! — Scripter Edition → http://localhost:${port}`);
+const game = createGameServer({ port });
+game.start().then(() => {
+  const scheme = game.scheme;
+  const ips = lanIPs();
+  console.log('');
+  console.log('🧦 GUILTY AS SOCK! — Scripter Edition');
+  console.log(`   Игра:        ${scheme}://localhost:${port}`);
+  for(const ip of ips) console.log(`   С телефона:  ${scheme}://${ip}:${port}`);
+  console.log(`   Присяжные:   ${scheme}://localhost:${port}/juror.html`);
+  console.log('');
+  if(scheme === 'https'){
+    console.log('   ⚠️  Сертификат самоподписанный: браузер покажет предупреждение —');
+    console.log('      «Дополнительно» → «Перейти на сайт». Так и надо (это локальная игра).');
+    console.log('   🎙️  После входа в зал игра сама запросит микрофон — разреши.');
+  }
+  console.log('');
+  console.log('   В игре: 🌐 ИГРАТЬ С ДРУЗЬЯМИ → «Создать зал» → друзьям ссылку и код');
+  console.log('   Остановить: Ctrl+C');
+  console.log('');
+}).catch(err => {
+  console.error('Не удалось запустить сервер:', err.message);
+  console.error('Порт занят? Попробуй так: GAS_PORT=8081 npm start');
+  process.exit(1);
 });
