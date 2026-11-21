@@ -11,7 +11,7 @@ const root = path.resolve(here, '..');
 let src = fs.readFileSync(path.join(root, 'js/main.js'), 'utf8');
 src = src
   .replace(/from 'three'/g, `from '${path.join(here,'three-shim.mjs').replace(/\\/g,'/')}'`)
-  .replace(/from '\.\/(data|sock|courtroom|ai|audio|net)\.js'/g, `from '${root.replace(/\\/g,'/')}/js/$1.js'`)
+  .replace(/from '\.\/(data|sock|courtroom|ai|audio|net|voice)\.js'/g, `from '${root.replace(/\\/g,'/')}/js/$1.js'`)
   .replace(/from 'three\/addons\/[^']*'/g, `from '${path.join(here,'three-shim.mjs').replace(/\\/g,'/')}'`);
 const outFile = path.join(here, '_main.test.mjs');
 fs.writeFileSync(outFile, src);

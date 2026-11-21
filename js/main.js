@@ -10,6 +10,7 @@ import { buildCourtroom, clearCourtroom } from './courtroom.js';
 import { drawHand, aiChooseCard, aiChooseStyle, persuasionScore, generatePresentLine, aiVote, generateHeadline, streamerVote } from './ai.js';
 import { sfx } from './audio.js';
 import { netSupported, isHosting, createRoom, sendState, leaveRoom, onPlayers, onChat, onBall, onVotes, onRoomClosed, currentRoom, currentPlayers, currentVotes, consumeBalls } from './net.js';
+import { initVoice, enableMic, disableMic, toggleMic, isMicOn, voiceSupported, voicePeerCount } from './voice.js';
 
 // ---------- utils ----------
 const $ = id => document.getElementById(id);
@@ -102,12 +103,33 @@ function updateNetBox(){
   const box = $('netBox'); if(!box) return;
   const online = isHosting();
   box.classList.toggle('hidden', !online);
+  updateMicButton();
   if(!online) return;
   $('netRoomCode').textContent = currentRoom() || '—';
   $('netPlayerCount').textContent = netFriendsCount();
   const cv = currentVotes();
   $('netVotesGuilty').textContent = cv.guilty;
   $('netVotesInnocent').textContent = cv.innocent;
+}
+function updateMicButton(){
+  const btn = $('btnMicHost'); if(!btn) return;
+  if(isMicOn()){
+    btn.classList.add('live');
+    btn.innerHTML = `🔴 Микрофон: В ЭФИРЕ <small>(${voicePeerCount()} слуш.) (M)</small>`;
+  } else {
+    btn.classList.remove('live');
+    btn.innerHTML = '🎙️ Микрофон: ВЫКЛ <small>(M)</small>';
+  }
+}
+async function toggleHostMic(){
+  if(!isHosting()){ toast('Сначала создай зал: 🌐 ИГРАТЬ С ДРУЗЬЯМИ'); return; }
+  if(!voiceSupported()){
+    toast('🎙️ Голос недоступен: нужен HTTPS и микрофон');
+    return;
+  }
+  try { await toggleMic(); }
+  catch(e){ toast('🎙️ ' + (e && e.message ? e.message : 'Нет доступа к микрофону')); }
+  updateMicButton();
 }
 function renderRoomPlayers(list){
   const box = $('roomPlayers'); if(!box) return;
@@ -149,6 +171,7 @@ function initNet(){
   });
   onRoomClosed(reason => {
     toast('🌐 ' + reason);
+    try { disableMic(); } catch(e){ /* ignore */ }
     $('netBox').classList.add('hidden');
     resetRoomUI();
   });
@@ -156,6 +179,7 @@ function initNet(){
   netBroadcastTimer = setInterval(() => broadcastState(), 2000);
 }
 function resetRoomUI(){
+  try { disableMic(); } catch(e){ /* ignore */ }
   leaveRoom();
   $('roomInfo')?.classList.add('hidden');
   $('btnCreateRoom')?.classList.remove('hidden');
@@ -174,12 +198,14 @@ function openOnlineScreen(){
   if(isHosting()) fillRoomInfo(currentRoom());
 }
 async function fillRoomInfo(room){
+  const scheme = (typeof location !== 'undefined' && location.protocol === 'https:') ? 'https' : 'http';
   $('roomCode').textContent = room || '—';
-  let url = `http://localhost:${location.port || 8080}/juror.html?room=${room}`;
+  let url = `${scheme}://localhost:${location.port || 8080}/juror.html?room=${room}`;
   try {
     const info = await fetch('/api/info').then(r => r.json()).catch(() => null);
     if(info && Array.isArray(info.ips) && info.ips.length){
-      url = `http://${info.ips[0]}:${info.port}/juror.html?room=${room}`;
+      const port = info.port || location.port || (scheme === 'https' ? 8080 : 80);
+      url = `${scheme}://${info.ips[0]}:${port}/juror.html?room=${room}`;
     }
   } catch(e) { /* оставим localhost */ }
   $('roomUrl').textContent = url;
@@ -208,6 +234,9 @@ let playerSock = null;
 let aiSocks = []; // {mesh, role, name, hand, prosScore, defScore, isPlayer}
 let paperBalls = [];
 let confetti = [];
+let fxParticles = [];
+let floaters = [];
+let dustCloud = null;
 let gameState = {
   phase:'menu', caseData:null, caseNum:1, matchWins:0, matchLosses:0,
   prosScore:0, defScore:0, chaos:0, paperLeft:5, round:0,
@@ -219,7 +248,7 @@ let shakeAmt = 0;
 function addShake(v){ shakeAmt = Math.min(0.55, shakeAmt + v); }
 const player = {
   pos: new THREE.Vector3(0,1.7,8), vel: new THREE.Vector3(), yaw:0, pitch:0,
-  onGround:true, keys:{}, locked:false,
+  onGround:true, keys:{}, locked:false, bobPhase:0, stepAcc:0, _moving:false,
 };
 const colliders = [
   {minX:-4.3,maxX:4.3,minZ:-10.4,maxZ:-8.6}, // bench
@@ -253,10 +282,14 @@ function initThree(){
   buildCourt();
   buildPlayerSock();
   buildPaperPool();
+  buildDust();
   animate();
 }
 
-function requestLock(){ /* free mouse-look: no pointer lock needed */ player.locked = true; }
+function requestLock(){
+  try{ canvas.requestPointerLock?.(); }catch(e){ /* не вышло — остаётся обычный режим */ }
+  player.locked = document.pointerLockElement === canvas;
+}
 function onResize(){
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
@@ -331,9 +364,11 @@ function updatePaper(dt){
         b.userData.active=false; b.visible=false;
         sfx.paperHit();
         addChaos(5);
+        spawnSparks(b.position.clone(), 0xfff3b0, 12);
         if(!b.userData.fromPlayer) addShake(0.12);
         if(b.userData.fromPlayer){
           gameState.paperHits++;
+          spawnFloater('+10', '#ffd166', b.position.clone().add(new THREE.Vector3(0,0.7,0)));
           if(gameState.paperHits>=10) unlockAchievement('paper_master');
           save.score += 10; storeSave(); updateHudScore();
         }
@@ -466,9 +501,22 @@ function allSocks(){ return aiSocks; }
 // ---------- Player movement ----------
 function syncCamera(){
   camera.position.copy(player.pos);
+  // Головная качка при ходьбе + лёгкий наклон корпуса
+  if(player._moving && player.onGround){
+    camera.position.y += Math.sin(player.bobPhase*2)*0.05;
+    camera.rotation.z = Math.sin(player.bobPhase)*0.014;
+  } else {
+    camera.rotation.z = 0;
+  }
   camera.rotation.order = 'YXZ';
   camera.rotation.y = player.yaw;
   camera.rotation.x = player.pitch;
+  // FOV-кик при беге
+  const targetFov = 72 + ((player.keys['shift'] && player._moving) ? 5 : 0);
+  if(Math.abs(camera.fov - targetFov) > 0.05){
+    camera.fov += (targetFov - camera.fov)*0.18;
+    camera.updateProjectionMatrix();
+  }
 }
 function updatePlayer(dt){
   if(gameState.phase==='menu' || gameState.phase==='verdict' || gameState.paused) return;
@@ -486,12 +534,18 @@ function updatePlayer(dt){
     move.add(right.clone().multiplyScalar(touch.move.x));
   }
   if(move.lengthSq()>0){
+    const sprinting = !!player.keys['shift'];
+    player._moving = true;
     move.normalize().multiplyScalar(speed*dt);
     player.pos.add(move);
+    player.bobPhase += dt*speed*(sprinting?1.75:1.45);
+    player.stepAcc += speed*dt;
+    if(player.stepAcc > 2.3 && player.onGround){ player.stepAcc = 0; sfx.step(); }
     playerSock.position.x = player.pos.x; playerSock.position.z = player.pos.z;
     playerSock.position.y = Math.abs(Math.sin(performance.now()*0.008))*0.06;
     playerSock.rotation.y = player.yaw + Math.PI;
   } else {
+    player._moving = false;
     playerSock.position.x = player.pos.x; playerSock.position.z = player.pos.z;
     playerSock.position.y = Math.sin(performance.now()*0.002)*0.03;
     playerSock.rotation.y = player.yaw + Math.PI;
@@ -591,7 +645,10 @@ function doObjection(){
   flash.style.opacity = '0.55';
   setTimeout(()=>{ flash.style.opacity = '0'; }, 180);
   const me = aiSocks.find(s=>s.isPlayer);
-  if(me) speakBy(me, pick(LINES.objection), 1800, '✋ Возражение!');
+  if(me){
+    speakBy(me, pick(LINES.objection), 1800, '✋ Возражение!');
+    if(me.mesh && me.mesh.position) spawnSparks(me.mesh.position.clone().add(new THREE.Vector3(0,2,0)), 0xff5f6d, 18);
+  }
   save.score += 15; storeSave(); updateHudScore();
 }
 function doGavel(){
@@ -640,6 +697,7 @@ function playerPresent(){
   const vars = { crime: gameState.caseData.crime, accused: gameState.caseData.accused };
   const line = generatePresentLine(card, style, vars);
   speakBy(me, line, 3400, `${STYLES[style].emoji} ${STYLES[style].name} • +${score} убедительности`);
+  if(me && me.mesh && me.mesh.position) spawnFloater('+'+Math.round(score), '#7bf1a8', me.mesh.position.clone().add(new THREE.Vector3(0,2.6,0)));
   sfx.present(); addChaos(STYLES[style].chaos*2);
   if(gameState.playerRole==='prosecutor') gameState.prosScore += score;
   else if(gameState.playerRole==='defense') gameState.defScore += score;
@@ -702,6 +760,7 @@ async function runTrial(token){
       speakBy(pros, generatePresentLine(card, style, vars), 3600, `${STYLES[style].emoji} ${STYLES[style].name} • +${score}`);
       sfx.present(); addChaos(STYLES[style].chaos);
       gameState.prosScore += score;
+      if(pros.mesh && pros.mesh.position) spawnFloater('+'+Math.round(score), '#ff9aa4', pros.mesh.position.clone().add(new THREE.Vector3(0,2.5,0)));
       pros.hand = pros.hand.filter(c=>c!==card);
       logCourt(`🃏 Прокурор: ${card.name} (+${score})`);
       await sleep(3200); if(!alive()) return;
@@ -721,6 +780,7 @@ async function runTrial(token){
       speakBy(def, generatePresentLine(card, style, vars), 3600, `${STYLES[style].emoji} ${STYLES[style].name} • +${score}`);
       sfx.present(); addChaos(STYLES[style].chaos);
       gameState.defScore += score;
+      if(def.mesh && def.mesh.position) spawnFloater('+'+Math.round(score), '#8df0e4', def.mesh.position.clone().add(new THREE.Vector3(0,2.5,0)));
       def.hand = def.hand.filter(c=>c!==card);
       logCourt(`🃏 Адвокат: ${card.name} (+${score})`);
       await sleep(3200); if(!alive()) return;
@@ -926,6 +986,86 @@ function updateConfetti(dt){
   }
 }
 
+// ---------- FX: искры, всплывающий текст, пыль ----------
+function spawnSparks(pos, colorHex=0xffd166, n=16){
+  const geo = new THREE.OctahedronGeometry(0.09);
+  const colors = [0xffe066, 0xffd166, 0xff9f1c, colorHex];
+  for(let i=0;i<n;i++){
+    const mat = new THREE.MeshBasicMaterial({ color: pick(colors) });
+    const m = new THREE.Mesh(geo, mat);
+    m.position.copy(pos);
+    const a = Math.random()*Math.PI*2;
+    m.userData.vel = new THREE.Vector3(Math.cos(a)*(2+Math.random()*3.2), 2+Math.random()*3.5, Math.sin(a)*(2+Math.random()*3.2));
+    m.userData.life = 0.85+Math.random()*0.45;
+    m.userData.maxLife = m.userData.life;
+    m.userData.spin = Math.random()*9;
+    scene.add(m); fxParticles.push(m);
+  }
+}
+function updateFxParticles(dt){
+  for(let i=fxParticles.length-1;i>=0;i--){
+    const p = fxParticles[i];
+    p.userData.life -= dt;
+    if(p.userData.life <= 0){ scene.remove(p); p.material.dispose?.(); fxParticles.splice(i,1); continue; }
+    p.userData.vel.y -= 12*dt;
+    p.position.addScaledVector(p.userData.vel, dt);
+    p.rotation.x += p.userData.spin*dt; p.rotation.y += p.userData.spin*dt;
+    p.scale.setScalar(Math.max(0.01, p.userData.life/p.userData.maxLife));
+  }
+}
+function spawnFloater(text, color='#ffd166', at=null){
+  try{
+    const c = document.createElement('canvas'); c.width = 256; c.height = 96;
+    const g = c.getContext('2d');
+    if(g){
+      g.font = '900 50px Arial'; g.textAlign = 'center';
+      g.lineWidth = 8; g.strokeStyle = 'rgba(0,0,0,.85)';
+      if(g.strokeText) g.strokeText(text, 128, 62);
+      g.fillStyle = color; g.fillText(text, 128, 62);
+    }
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+    const spr = new THREE.Sprite(mat);
+    spr.scale.set(1.7, 0.64, 1);
+    const base = at || (playerSock ? playerSock.position.clone().add(new THREE.Vector3(0, 2.7, 0)) : new THREE.Vector3(0, 2.6, 0));
+    spr.position.copy(base);
+    scene.add(spr);
+    floaters.push({ spr, life: 1.5, vy: 1.15 });
+  }catch(e){ /* вне браузера — тихо пропускаем */ }
+}
+function updateFloaters(dt){
+  for(let i=floaters.length-1;i>=0;i--){
+    const f = floaters[i]; f.life -= dt;
+    if(f.life <= 0){
+      scene.remove(f.spr);
+      try { f.spr.material.map?.dispose?.(); f.spr.material.dispose?.(); } catch(e){ /* ignore */ }
+      floaters.splice(i,1); continue;
+    }
+    f.spr.position.y += f.vy*dt; f.vy *= (1-0.7*dt);
+    f.spr.material.opacity = Math.min(1, f.life/0.7);
+  }
+}
+function buildDust(){
+  const N = 90;
+  const pos = new Float32Array(N*3);
+  for(let i=0;i<N;i++){ pos[i*3]=rand(-13,13); pos[i*3+1]=rand(0.6,7.2); pos[i*3+2]=rand(-11,11); }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({ color:0xffe9b0, size:0.055, transparent:true, opacity:0.5, blending:THREE.AdditiveBlending, depthWrite:false, sizeAttenuation:true });
+  dustCloud = new THREE.Points(geo, mat);
+  dustCloud.name = 'dustCloud';
+  scene.add(dustCloud);
+}
+function updateDust(t){
+  if(!dustCloud) return;
+  dustCloud.rotation.y = t*0.012;
+  const pos = dustCloud.geometry.attributes.position;
+  for(let i=0;i<pos.count;i++){
+    pos.setY(i, pos.getY(i) + Math.sin(t*0.5 + i*1.7)*0.0016);
+  }
+  pos.needsUpdate = true;
+}
+
 // ---------- Case / match ----------
 function dailyCase(){
   const d = new Date();
@@ -1045,7 +1185,7 @@ function startChatSim(){
 
 // ---------- Pause ----------
 function pauseGame(auto=false){
-  if(gameState.phase==='menu'||gameState.phase==='verdict') return;
+  if(gameState.phase==='menu'||gameState.phase==='verdict'||gameState.paused) return;
   gameState.paused = true;
   showScreen('pauseScreen');
   document.exitPointerLock?.();
@@ -1146,6 +1286,9 @@ function animate(){
     }
   }
 
+  updateFxParticles(dt);
+  updateFloaters(dt);
+  updateDust(t);
   if(isHosting()){
     for(const ev of consumeBalls()) spawnNetBall(ev.from);
   }
@@ -1164,24 +1307,38 @@ function initInput(){
     if(k==='e') doInteract();
     if(k==='q') doGavel();
     if(k==='r') doObjection();
+    if(k==='m' && !/^(input|textarea)$/i.test((e.target && e.target.tagName) || '')) { toggleHostMic(); }
     if(k==='escape' && gameState.phase!=='menu' && gameState.phase!=='verdict'){
+      // Пока мышь захвачена, Esc отдаём браузеру (он отпустит захват) —
+      // паузу откроет обработчик pointerlockchange. Иначе — переключаем сами.
+      if(document.pointerLockElement === canvas) return;
       if(gameState.paused) resumeGame(); else pauseGame();
     }
   });
   window.addEventListener('keyup', e=>{ player.keys[e.key.toLowerCase()]=false; });
-  // Free mouse-look: cursor over the 3D canvas steers the camera, cursor over HUD stays clickable.
+  // FPS-look: клик по залу захватывает мышь; Esc (браузер) отпускает.
+  // Без захвата — старый режим: обзор, пока курсор над сценой.
   window.addEventListener('mousemove', e=>{
+    const locked = document.pointerLockElement === canvas;
     if(!$('hud').classList.contains('hidden') && !gameState.paused &&
        !['menu','verdict'].includes(gameState.phase) &&
-       e.target && e.target.id === 'gameCanvas'){
-      const sens = 0.0024 * (save.settings.sens||5)/5;
+       (locked || (e.target && e.target.id === 'gameCanvas'))){
+      const sens = 0.0024 * (save.settings.sens||5)/5 * (locked ? 1.15 : 1);
       player.yaw -= (e.movementX||0) * sens;
       player.pitch = clamp(player.pitch - (e.movementY||0)*sens, -1.35, 1.35);
     }
   });
+  document.addEventListener('pointerlockchange', ()=>{
+    player.locked = document.pointerLockElement === canvas;
+    const ch = $('crosshair'); if(ch) ch.classList.toggle('locked-look', player.locked);
+    // Потеряли захват в разгаре суда → сама пауза (Esc браузера поглощает наш keydown).
+    if(!player.locked && !gameState.paused && !['menu','verdict'].includes(gameState.phase)) pauseGame(true);
+  });
   document.addEventListener('mousedown', e=>{
     if(e.button!==0) return;
-    if(!$('hud').classList.contains('hidden') && !gameState.paused && e.target && e.target.id==='gameCanvas'){
+    const overCanvas = (document.pointerLockElement === canvas) || (e.target && e.target.id==='gameCanvas');
+    if(!$('hud').classList.contains('hidden') && !gameState.paused && overCanvas){
+      if(document.pointerLockElement !== canvas && e.target && e.target.id==='gameCanvas') requestLock();
       throwPaper(true);
     }
   });
@@ -1225,6 +1382,15 @@ function initUI(){
     sfx.fanfare();
     fillRoomInfo(res.room);
     updateNetBox();
+    // 🎙️ Голос хоста — автоматически (клик по кнопке = жест пользователя)
+    initVoice();
+    if(voiceSupported()){
+      try { await enableMic(); toast('🎙️ Голос включён — друзья тебя слышат!'); }
+      catch(e){ toast('🎙️ Микрофон не дан — друзья слышать тебя не будут'); }
+      updateMicButton();
+    } else {
+      toast('🎙️ Голос недоступен (нужен HTTPS) — друзья сыграют в «немом» режиме');
+    }
     toast('🌐 Зал создан! Отправь друзьям ссылку и код.');
   });
   $('btnCopyUrl').addEventListener('click', async ()=>{
@@ -1238,6 +1404,7 @@ function initUI(){
     }
   });
   $('btnCloseRoom').addEventListener('click', ()=>{ sfx.click(); resetRoomUI(); toast('🏳️ Зал закрыт'); });
+  $('btnMicHost').addEventListener('click', ()=>{ sfx.click(); toggleHostMic(); });
   document.querySelectorAll('.btn-close').forEach(b=>b.addEventListener('click', ()=>{
     sfx.click();
     if(returnToPause && gameState.phase!=='menu' && gameState.phase!=='verdict'){ returnToPause=false; showScreen('pauseScreen'); }
@@ -1453,6 +1620,7 @@ try{
   initTouch();
   initUI();
   initNet();
+  initVoice();
 }catch(err){
   console.error(err);
   $('loadText').textContent = 'Ошибка загрузки: ' + err.message + ' — проверь интернет (нужен CDN Three.js)';

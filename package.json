@@ -1,8 +1,8 @@
 {
   "name": "guilty-as-sock-scripter-edition",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
-  "description": "GUILTY AS SOCK! — Scripter Edition: крутейший 3D суд носков (Three.js). Полная фанатская игра по мотивам Guilty as Sock + наши добавки: онлайн-зал для друзей по коду комнаты (голоса, комки, чат), хаос-метр, физика комков, достижения, редактор носка, EXE для Windows.",
+  "description": "GUILTY AS SOCK! — Scripter Edition: крутейший 3D суд носков (Three.js). Полная фанатская игра по мотивам Guilty as Sock + наши добавки: онлайн-зал для друзей (голосовой чат WebRTC, голоса, комки, чат), хаос-метр, физика комков, достижения, редактор носка, EXE для Windows.",
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
@@ -13,6 +13,7 @@
     "dist:win": "node scripts/build-exe.mjs --platform=win32 --arch=x64"
   },
   "dependencies": {
+    "selfsigned": "^5.5.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -23,6 +24,17 @@
     "png-to-ico": "^3.0.1",
     "three": "^0.160.1"
   },
-  "keywords": ["3d", "game", "browser", "threejs", "courtroom", "sock", "party-game", "multiplayer", "electron", "lan"],
+  "keywords": [
+    "3d",
+    "game",
+    "browser",
+    "threejs",
+    "courtroom",
+    "sock",
+    "party-game",
+    "multiplayer",
+    "electron",
+    "lan"
+  ],
   "license": "MIT"
 }

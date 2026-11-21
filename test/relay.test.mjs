@@ -26,7 +26,7 @@ const connect = (url) => new Promise((resolve, reject) => {
   ws.once('error', reject);
 });
 
-const game = createGameServer({ port: 0, host: '127.0.0.1' });
+const game = createGameServer({ port: 0, host: '127.0.0.1', secure: false });
 await game.start();
 const port = game.server.address().port;
 const url = `ws://127.0.0.1:${port}/ws`;
@@ -91,12 +91,43 @@ stranger.send(JSON.stringify({ t:'join', room: 'ZZZZZ', name:'Тумблинг' 
 const errMsg = await waitFor(stranger, m => m.t === 'error', 'error');
 ok('неверный код — понятная ошибка', /не найден/i.test(errMsg.msg || ''));
 
+// --- сигналинг WebRTC: адресный и широковещательный ---
+const jurorId = joined.id;
+const sigToJuror = waitFor(juror2, m => m.t === 'signal' && m.data?.description?.type === 'offer', 'signal-offer');
+host.send(JSON.stringify({ t:'signal', to: jurorId, data: { description: { type:'offer', sdp:'v=0 fake-sdp' } } }));
+const sigOffer = await sigToJuror;
+ok('адресный WebRTC-сигнал дошёл до адресата', sigOffer.from !== undefined && sigOffer.data.description.sdp.includes('fake-sdp'));
+const sigBroadcast = waitFor(host, m => m.t === 'signal' && m.data?.candidate, 'signal-broadcast');
+juror2.send(JSON.stringify({ t:'signal', data: { candidate: { candidate:'candidate:123' } } }));
+const sigB = await sigBroadcast;
+ok('широковещательный сигнал дошёл до хоста с id отправителя', sigB.from === jurorId);
+
 // --- хост отключается — зал закрыт ---
 host.close();
 const closed = await waitFor(juror2, m => m.t === 'closed', 'closed');
 ok('при уходе хоста присяжный получает «зал закрыт»', !!closed.msg);
 
 await game.close();
+
+// --- HTTPS-режим: сервер поднимается с самоподписанным сертификатом ---
+import https from 'node:https';
+const secureGame = createGameServer({ port: 0, host: '127.0.0.1', secure: true });
+try {
+  await secureGame.start();
+  const sPort = secureGame.server.address().port;
+  const body = await new Promise((resolve, reject) => {
+    https.get({ host: '127.0.0.1', port: sPort, path: '/api/info', rejectUnauthorized: false }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => resolve({ status: res.statusCode, data }));
+    }).on('error', reject);
+  });
+  ok('HTTPS-сервер отдаёт /api/info по самоподписанному сертификату', body.status === 200 && body.data.includes('"secure":true'));
+  await secureGame.close();
+} catch(e){
+  ok('HTTPS-сервер поднимается', false);
+  console.error('   HTTPS ошибка:', e.message);
+}
 
 if(failed){ console.error(`\nRELAY TEST FAILED: ${failed} проверок(и) упали`); process.exit(1); }
 console.log('\nRELAY TEST RESULT: OK');

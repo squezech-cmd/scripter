@@ -3,3 +3,4 @@ test/_main.test.mjs
 .DS_Store
 *.log
 release/
+.cache/

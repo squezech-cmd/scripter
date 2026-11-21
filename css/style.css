@@ -221,3 +221,12 @@ label small{text-transform:none;color:#aaa;font-weight:400}
 .netbox-code b{color:var(--gold);letter-spacing:.18em}
 .netbox-row{font-variant-numeric:tabular-nums}
 @media (max-width:700px){ #netBox{ bottom:110px; right:8px; font-size:11px; min-width:0; } .room-code{ font-size:40px; } }
+
+/* VOICE / MIC */
+.online-voice-note{background:rgba(46,196,182,.1);border:1px solid rgba(46,196,182,.4);color:#8df0e4;border-radius:12px;padding:10px 12px;font-size:12px;line-height:1.55;margin-bottom:10px}
+.netbox-mic{margin-top:6px;width:100%;background:#1d2b26;border:1px solid rgba(46,196,182,.5);color:#8df0e4;border-radius:10px;padding:6px 8px;font-size:12px;font-weight:800;cursor:pointer;letter-spacing:.03em}
+.netbox-mic:hover{background:#233a32}
+.netbox-mic.live{background:#4a0f14;border-color:#ff5f6d;color:#ffd7da;animation:micPulse 1.4s ease-in-out infinite}
+@keyframes micPulse{0%,100%{box-shadow:0 0 8px rgba(230,57,70,.3)}50%{box-shadow:0 0 18px rgba(230,57,70,.55)}}
+.netbox-mic small{opacity:.6;font-weight:600}
+#crosshair.locked-look{color:var(--gold);text-shadow:0 0 10px rgba(245,197,66,.7)}

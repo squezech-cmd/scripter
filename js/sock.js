@@ -69,7 +69,7 @@ export function createSock(config = {}){
 
   const group = new THREE.Group();
   const tex = makePatternTexture(pattern, color);
-  const bodyMat = new THREE.MeshStandardMaterial({ map: tex, roughness:0.85, metalness:0.0 });
+  const bodyMat = new THREE.MeshStandardMaterial({ map: tex, roughness:0.8, metalness:0.0, bumpMap: tex, bumpScale: 0.6 });
   const darkMat = new THREE.MeshStandardMaterial({ color:0x222222, roughness:0.6 });
 
   // Body (sock tube + foot)
