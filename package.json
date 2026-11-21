@@ -1,6 +1,6 @@
 {
   "name": "guilty-as-sock-scripter-edition",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
   "description": "GUILTY AS SOCK! — Scripter Edition: крутейший 3D суд носков (Three.js). Полная фанатская игра по мотивам Guilty as Sock + наши добавки: онлайн-зал для друзей (голосовой чат WebRTC, голоса, комки, чат), хаос-метр, физика комков, достижения, редактор носка, EXE для Windows.",
   "type": "module",
