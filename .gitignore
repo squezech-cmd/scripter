@@ -1,4 +1,14 @@
+# Local and generated build outputs (the one-file Windows game is intentional).
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+*.log
+.DS_Store
+
 node_modules/
 test/_main.test.mjs
-.DS_Store
-*.log

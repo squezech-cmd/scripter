@@ -1,0 +1,24 @@
+Third-party notices for Burger Shift: Diner Edition
+
+Panda3D 1.10.16 (c) Carnegie Mellon University and contributors, Modified BSD:
+Panda3D.txt; source: https://github.com/panda3d/panda3d/tree/v1.10.16
+
+Python 3.11.9, Python Software Foundation License: Python-3.11.9.txt;
+source: https://github.com/python/cpython/tree/v3.11.9
+
+OpenAL Soft 1.19.1, LGPL v2: OpenAL-Soft-1.19.1.txt;
+source: https://github.com/kcat/openal-soft/tree/openal-soft-1.19.1
+This component is provided in Panda3D's replaceable p3openal_audio plugin.
+
+OpenSSL 3.0.13, Apache License 2.0: OpenSSL-3.0.13.txt;
+source: https://github.com/openssl/openssl/tree/openssl-3.0.13
+
+NVIDIA Cg Runtime 3.1 (c) 2002-2012 NVIDIA Corporation, proprietary,
+redistributed unmodified as provided by Panda3D. Toolkit and license:
+https://developer.download.nvidia.com/cg/cg_3_1_0013.html
+https://launchpad.net/ubuntu/bionic/+source/nvidia-cg-toolkit/+copyright
+
+7-Zip LZMA SDK self-extractor, by Igor Pavlov, is in the public domain:
+https://www.7-zip.org/sdk.html
+
+DejaVu fonts: see ../fonts/LICENSE-DejaVu.txt.
