@@ -268,7 +268,7 @@ function initThree(){
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.1;
+  renderer.toneMappingExposure = 1.18;
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a0914);

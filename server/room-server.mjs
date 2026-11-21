@@ -125,9 +125,11 @@ export function createGameServer({ root, port = 8080, host = '0.0.0.0', secure }
 
   // ---------- static + api ----------
   let server = null;
+  let mirrorServer = null;
   let wss = null;
   let scheme = 'http';
   const getPort = () => (server && server.address() ? server.address().port : port);
+  const getHttpPort = () => (mirrorServer && mirrorServer.address() ? mirrorServer.address().port : (scheme === 'http' ? getPort() : null));
 
   const handler = (req, res) => {
     const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
@@ -315,6 +317,10 @@ export function createGameServer({ root, port = 8080, host = '0.0.0.0', secure }
         const { key, cert } = await getCert(gameRoot);
         server = https.createServer({ key, cert }, handler);
         scheme = 'https';
+        // HTTP-зеркало только для локали: localhost — и так secure context,
+        // а у локального окна EXE/браузера нечему падать на сертификатах.
+        // Друзья по LAN продолжают ходить на HTTPS (самоподписанный, одно принятие).
+        mirrorServer = http.createServer(handler);
       } catch(err){
         console.warn('[server] HTTPS недоступен (' + err.message + ') — запускаю HTTP (микрофон полноценно работает только на localhost)');
         server = http.createServer(handler);
@@ -324,17 +330,25 @@ export function createGameServer({ root, port = 8080, host = '0.0.0.0', secure }
       server = http.createServer(handler);
       scheme = 'http';
     }
-    wss = new WebSocketServer({ server, path: '/ws' });
+    wss = new WebSocketServer({ noServer: true });
     wss.on('connection', onConnection);
+    const upgrade = (req, socket, head) => {
+      let pathname = '/';
+      try { pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname; }
+      catch(e){ try { socket.destroy(); } catch(_){} return; }
+      if(pathname !== '/ws'){ try { socket.destroy(); } catch(_){} return; }
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    };
+    server.on('upgrade', upgrade);
+    if(mirrorServer) mirrorServer.on('upgrade', upgrade);
     startBeat();
-    await new Promise((resolve, reject) => {
+    const listen = (srv, p, h) => new Promise((resolve, reject) => {
       const onError = (err) => reject(err);
-      server.once('error', onError);
-      server.listen(port, host, () => {
-        server.removeListener('error', onError);
-        resolve();
-      });
+      srv.once('error', onError);
+      srv.listen(p, h, () => { srv.removeListener('error', onError); resolve(); });
     });
+    await listen(server, port, host);
+    if(mirrorServer) await listen(mirrorServer, 0, '127.0.0.1'); // случайный свободный, только localhost
     return server;
   }
 
@@ -343,6 +357,7 @@ export function createGameServer({ root, port = 8080, host = '0.0.0.0', secure }
     if(wss) for(const ws of wss.clients) { try { ws.terminate(); } catch(e){ /* ignore */ } }
     if(wss) await new Promise(r => wss.close(() => r()));
     if(server) await new Promise(r => server.close(() => r()));
+    if(mirrorServer) await new Promise(r => mirrorServer.close(() => r()));
   }
 
   return {
@@ -350,5 +365,7 @@ export function createGameServer({ root, port = 8080, host = '0.0.0.0', secure }
     get scheme(){ return scheme; },
     get server(){ return server; },
     get wss(){ return wss; },
+    get mirrorServer(){ return mirrorServer; },
+    get httpPort(){ return getHttpPort(); },
   };
 }

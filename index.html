@@ -62,7 +62,7 @@
         <span>🎯 <b id="statScore">0</b> очков</span>
       </div>
       <p class="hint">WASD — движение • Мышь — обзор • E — действие • ЛКМ — бросок комка • Q — молоток судьи</p>
-      <p class="addon-note">✨ SCRIPTER ADDONS 2.1: 🎙️ Голосовой чат с друзьями в зале • 🌐 Зал по коду (голоса влияют на вердикт!) • Хаос-метр • Стример-режим • Бумажная физика • Дневное дело • Достижения • EXE для Windows</p>
+      <p class="addon-note">✨ SCRIPTER ADDONS 2.2: 🎙️ Голосовой чат с друзьями в зале • 🌐 Зал по коду (голоса влияют на вердикт!) • Хаос-метр • Стример-режим • Бумажная физика • Дневное дело • Достижения • EXE для Windows</p>
     </div>
   </div>
 </div>
@@ -388,6 +388,46 @@
   <span>🏆</span><div><b id="achTitle">Достижение</b><small id="achDesc"></small></div>
 </div>
 
-<script type="module" src="js/main.js"></script>
+<!-- Фатальные ошибки показываем большим текстом, а не чёрным экраном -->
+<div id="fatalError" style="display:none;position:fixed;inset:0;z-index:9999;background:#16060a;color:#ffb3c0;font-family:system-ui,Segoe UI,Arial,sans-serif;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box">
+  <div style="max-width:720px">
+    <div style="font-size:64px">🧦💥</div>
+    <h1 style="margin:12px 0;color:#ffd166">Игра споткнулась</h1>
+    <p id="fatalErrorText" style="line-height:1.6;color:#e8b7bf;white-space:pre-wrap"></p>
+    <button onclick="location.reload()" style="margin-top:16px;font-size:18px;padding:12px 26px;border:0;border-radius:12px;background:#f5c542;color:#231a00;font-weight:800;cursor:pointer">↻ Перезагрузить</button>
+  </div>
+</div>
+<script>
+window.__gasFatal = function(msg){
+  try{
+    var box = document.getElementById('fatalError');
+    var txt = document.getElementById('fatalErrorText');
+    if(!box || !txt) return;
+    txt.textContent = String(msg || 'Неизвестная ошибка');
+    box.style.display = 'flex';
+  }catch(e){ /* ignore */ }
+};
+function gasBootIncomplete(){
+  try{
+    var ls = document.getElementById('loadingScreen');
+    return !!(ls && ls.classList.contains('active'));
+  }catch(e){ return true; }
+}
+window.addEventListener('error', function(ev){
+  if(!gasBootIncomplete()) return; // игра уже загрузилась — не пугаем игрока шумом
+  window.__gasFatal((ev && ev.message) ? ev.message : String((ev && ev.error) || 'Ошибка скрипта'));
+}, true);
+window.addEventListener('unhandledrejection', function(ev){
+  if(!gasBootIncomplete()) return;
+  var r = ev && ev.reason;
+  window.__gasFatal('Обещание упало: ' + (r && r.message ? r.message : String(r)));
+});
+</script>
+<script type="module">
+import('./js/main.js').catch(function(err){
+  console.error(err);
+  window.__gasFatal('Не загрузился код игры:\n' + (err && err.message ? err.message : String(err)));
+});
+</script>
 </body>
 </html>

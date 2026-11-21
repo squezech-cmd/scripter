@@ -69,7 +69,12 @@ export function createSock(config = {}){
 
   const group = new THREE.Group();
   const tex = makePatternTexture(pattern, color);
-  const bodyMat = new THREE.MeshStandardMaterial({ map: tex, roughness:0.8, metalness:0.0, bumpMap: tex, bumpScale: 0.6 });
+  // MeshPhysicalMaterial + sheen = «вязаная ткань»: свет скользит по волокнам
+  const bodyMat = new THREE.MeshPhysicalMaterial({
+    map: tex, roughness:0.72, metalness:0.0,
+    bumpMap: tex, bumpScale: 0.85,
+    sheen: 1.0, sheenRoughness: 0.52, sheenColor: 0xffffff,
+  });
   const darkMat = new THREE.MeshStandardMaterial({ color:0x222222, roughness:0.6 });
 
   // Body (sock tube + foot)

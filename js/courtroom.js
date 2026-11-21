@@ -134,6 +134,71 @@ function woodTexture(base, dark){
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
+// Радиальное «свечение» (аддитивное) — нимб для неона и люстры
+function glowTexture(){
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(64,64,4, 64,64,64);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.35, 'rgba(255,255,255,.45)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0,0,128,128);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// Радиальная мягкая «контактная тень» под мебелью
+function contactShadowTexture(){
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(64,64,6, 64,64,64);
+  grad.addColorStop(0, 'rgba(0,0,0,.55)');
+  grad.addColorStop(0.6, 'rgba(0,0,0,.28)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grad; g.fillRect(0,0,128,128);
+  return new THREE.CanvasTexture(c);
+}
+// Портрет носка на стену (маслом, но из canvas)
+function portraitTexture(title, hue){
+  const c = document.createElement('canvas'); c.width = 256; c.height = 320;
+  const g = c.getContext('2d');
+  // бархатная подложка
+  const bg = g.createRadialGradient(128,150,10, 128,160,220);
+  bg.addColorStop(0, `hsl(${hue} 45% 34%)`);
+  bg.addColorStop(1, `hsl(${hue} 55% 14%)`);
+  g.fillStyle = bg; g.fillRect(0,0,256,320);
+  // сам носок — уважаемый
+  g.save();
+  g.translate(128, 148);
+  g.fillStyle = `hsl(${(hue+160)%360} 70% 55%)`;
+  g.beginPath();
+  g.moveTo(-34, 92);
+  g.quadraticCurveTo(-52, 30, -34, -52);
+  g.quadraticCurveTo(-30, -74, -8, -74);
+  g.quadraticCurveTo(18, -74, 18, -46);
+  g.lineTo(20, 30);
+  g.quadraticCurveTo(46, 34, 48, 66);
+  g.quadraticCurveTo(48, 96, 12, 96);
+  g.quadraticCurveTo(-10, 96, -34, 92);
+  g.fill();
+  // резинка
+  g.fillStyle = 'rgba(255,255,255,.85)';
+  g.fillRect(-36, -72, 58, 14);
+  // глаза
+  g.fillStyle = '#fff';
+  g.beginPath(); g.arc(-16, -18, 9, 0, Math.PI*2); g.arc(14, -18, 9, 0, Math.PI*2); g.fill();
+  g.fillStyle = '#1a1a1a';
+  g.beginPath(); g.arc(-16, -18, 4, 0, Math.PI*2); g.arc(14, -18, 4, 0, Math.PI*2); g.fill();
+  g.restore();
+  // табличка
+  g.fillStyle = '#e8d9a8'; g.fillRect(38, 262, 180, 30);
+  g.strokeStyle = '#8a6a1a'; g.lineWidth = 3; g.strokeRect(38, 262, 180, 30);
+  g.fillStyle = '#3a2a05'; g.font = '900 15px Georgia, serif'; g.textAlign = 'center';
+  g.fillText(title, 128, 283);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 
 function box(w,h,d,color,x,y,z,opts={}){
   const mat = opts.map
@@ -177,12 +242,25 @@ export function buildCourtroom(scene, themeId='classic'){
   floor.rotation.x = -Math.PI/2; floor.receiveShadow = true;
   group.add(floor);
 
-  // Центральный ковёр с весами правосудия
+  // Центральный ковёр с весами правосудия (бархат — sheen)
   const carpetTex = carpetTexture(accentCss);
   const carpet = new THREE.Mesh(new THREE.PlaneGeometry(9,13.2),
-    new THREE.MeshStandardMaterial({ map: carpetTex, roughness:0.98 }));
+    new THREE.MeshPhysicalMaterial({ map: carpetTex, roughness:0.94, sheen: 0.9, sheenRoughness: 0.6, sheenColor: 0xff8f8f }));
   carpet.rotation.x = -Math.PI/2; carpet.position.set(0,0.02,0.5); carpet.receiveShadow = true;
   group.add(carpet);
+
+  // Контактные тени под мебелью — якорят объекты к полу
+  const shadowTex = contactShadowTexture();
+  const addContactShadow = (x,z,w,d,opacity=0.75)=>{
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w,d),
+      new THREE.MeshBasicMaterial({ map: shadowTex, transparent:true, opacity, depthWrite:false }));
+    m.rotation.x = -Math.PI/2; m.position.set(x,0.025,z); m.renderOrder = 1; group.add(m);
+  };
+  addContactShadow(0,-9.3, 9.6,3.2);
+  addContactShadow(-4.5,-3.9, 5.2,2.4);
+  addContactShadow( 4.5,-3.9, 5.2,2.4);
+  addContactShadow(9,-1.8, 3.4,3.2);
+  addContactShadow(-9.5,-1.2, 3.0,8.2);
 
   // Walls (обои) + деревянные панели (нижняя треть)
   const mkWall = (w,h,x,y,z,ry)=>{
@@ -237,7 +315,33 @@ export function buildCourtroom(scene, themeId='classic'){
   gHandle.position.x = 0.45; gavel.add(gHandle);
   gavel.position.set(2.5,2.55,-9.5); gavel.rotation.y = 0.4; group.add(gavel);
 
-  // JUSTICE sign (неоновая табличка)
+  // Портреты основателей суда на боковых стенах (маслом, из canvas)
+  const portraits = [
+    { title:'Барон Фусфус I', hue: 18, x:-14.85, z:-4.5, ry: Math.PI/2 },
+    { title:'Леди Пятка Муза', hue: 200, x:-14.85, z: 3.5, ry: Math.PI/2 },
+    { title:'Судья Сэр Шерсть', hue: 265, x: 14.85, z:-4.5, ry: -Math.PI/2 },
+    { title:'Генерал Манжета', hue: 130, x: 14.85, z: 3.5, ry: -Math.PI/2 },
+  ];
+  for(const p of portraits){
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(2.1,2.6,0.12),
+      new THREE.MeshStandardMaterial({ color:0xc9a227, metalness:0.75, roughness:0.28, emissive:0x2a1f00, emissiveIntensity:0.4 }));
+    frame.position.set(p.x, 4.3, p.z); frame.rotation.y = p.ry; group.add(frame);
+    const art = new THREE.Mesh(new THREE.PlaneGeometry(1.8,2.3),
+      new THREE.MeshStandardMaterial({ map: portraitTexture(p.title, p.hue), roughness:0.6 }));
+    art.position.set(p.x, 4.3, p.z); art.rotation.y = p.ry;
+    art.translateZ(0.075); group.add(art);
+    // табличка под портретом
+    const plateC = document.createElement('canvas'); plateC.width=256; plateC.height=48;
+    const pg = plateC.getContext('2d');
+    pg.fillStyle='#c9a227'; pg.fillRect(0,0,256,48);
+    pg.fillStyle='#231800'; pg.font='700 22px Georgia, serif'; pg.textAlign='center'; pg.fillText(p.title, 128, 32);
+    const plateTex = new THREE.CanvasTexture(plateC); plateTex.colorSpace = THREE.SRGBColorSpace;
+    const plate = new THREE.Mesh(new THREE.PlaneGeometry(1.2,0.24), new THREE.MeshBasicMaterial({ map: plateTex }));
+    plate.position.set(p.x, 2.82, p.z); plate.rotation.y = p.ry;
+    plate.translateZ(0.06); group.add(plate);
+  }
+
+  // JUSTICE sign (неоновая табличка) + нимб свечения
   const signCanvas = document.createElement('canvas'); signCanvas.width=1024; signCanvas.height=128;
   const sg = signCanvas.getContext('2d');
   sg.fillStyle='#140f22'; sg.fillRect(0,0,1024,128);
@@ -248,6 +352,9 @@ export function buildCourtroom(scene, themeId='classic'){
   const signTex = new THREE.CanvasTexture(signCanvas); signTex.colorSpace = THREE.SRGBColorSpace;
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(9,1.1), new THREE.MeshBasicMaterial({ map: signTex }));
   sign.position.set(0,6.2,-11.9); group.add(sign);
+  const glowTex = glowTexture();
+  const signGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffd166, transparent:true, opacity:0.35, blending:THREE.AdditiveBlending, depthWrite:false }));
+  signGlow.scale.set(11,2.6,1); signGlow.position.set(0,6.2,-11.7); group.add(signGlow);
 
   // Prosecutor & Defense tables
   const table = (x,z,ry,color)=>{
@@ -340,6 +447,9 @@ export function buildCourtroom(scene, themeId='classic'){
   const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.03,2,6), new THREE.MeshStandardMaterial({color:0x888888}));
   chain.position.y = 1.2; chand.add(chain);
   chand.position.set(0,6.5,0); group.add(chand);
+  // нимб люстры
+  const chandGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xffdf9e, transparent:true, opacity:0.5, blending:THREE.AdditiveBlending, depthWrite:false }));
+  chandGlow.scale.set(5.2,5.2,1); chandGlow.position.set(0,6.5,0); group.add(chandGlow);
 
   // Windows with light (back wall) + световые лучи из окон
   for(let i=-2;i<=2;i++){
@@ -380,7 +490,7 @@ export function buildCourtroom(scene, themeId='classic'){
   const hemi = new THREE.HemisphereLight(0xfff3d6, 0x1a1430, 0.55);
   hemi.name = 'courtHemi';
   scene.add(hemi);
-  const dir = new THREE.DirectionalLight(theme.light, 1.15);
+  const dir = new THREE.DirectionalLight(theme.light, 1.35);
   dir.position.set(8,14,6); dir.castShadow = true;
   dir.shadow.mapSize.set(2048,2048);
   dir.shadow.camera.left=-16; dir.shadow.camera.right=16; dir.shadow.camera.top=16; dir.shadow.camera.bottom=-16;
@@ -390,6 +500,13 @@ export function buildCourtroom(scene, themeId='classic'){
   const point = new THREE.PointLight(theme.accent, 26, 26, 1.6);
   point.position.set(0,6,0); point.name='courtPoint';
   scene.add(point);
+  // тёплая лужа света от люстры в центре ковра
+  const spot = new THREE.SpotLight(0xffd9a0, 55, 20, 0.62, 0.75, 1.5);
+  spot.position.set(0,6.4,0);
+  spot.target.position.set(0,0,0.5);
+  spot.target.name = 'courtSpotTarget';
+  spot.name = 'courtSpot';
+  scene.add(spot); scene.add(spot.target);
   // театральные контурные света: синий (обвинение) / бирюзовый (защита)
   const prosSpot = new THREE.PointLight(0x4361ee, 14, 14, 1.8);
   prosSpot.position.set(-7,4.5,-4); prosSpot.name = 'courtPros'; scene.add(prosSpot);
@@ -412,7 +529,7 @@ export function buildCourtroom(scene, themeId='classic'){
 }
 
 export function clearCourtroom(scene){
-  for(const name of ['courtroom','courtAmbient','courtHemi','courtDir','courtPoint','courtPros','courtDef']){
+  for(const name of ['courtroom','courtAmbient','courtHemi','courtDir','courtPoint','courtPros','courtDef','courtSpot','courtSpotTarget']){
     const o = scene.getObjectByName(name);
     if(o) scene.remove(o);
   }

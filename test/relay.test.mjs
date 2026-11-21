@@ -111,6 +111,7 @@ await game.close();
 
 // --- HTTPS-режим: сервер поднимается с самоподписанным сертификатом ---
 import https from 'node:https';
+import http from 'node:http';
 const secureGame = createGameServer({ port: 0, host: '127.0.0.1', secure: true });
 try {
   await secureGame.start();
@@ -123,6 +124,43 @@ try {
     }).on('error', reject);
   });
   ok('HTTPS-сервер отдаёт /api/info по самоподписанному сертификату', body.status === 200 && body.data.includes('"secure":true'));
+
+  // HTTP-зеркало для локального окна: тот же сервер отдаёт игру без TLS
+  const mPort = secureGame.httpPort;
+  ok('HTTP-зеркало поднялось для локали', Number.isInteger(mPort) && mPort > 0);
+  if(mPort){
+    const mirrorBody = await new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port: mPort, path: '/api/info' }, (res) => {
+        let data = '';
+        res.on('data', (chunk) => data += chunk);
+        res.on('end', () => resolve({ status: res.statusCode, data }));
+      }).on('error', reject);
+    });
+    ok('HTTP-зеркало отдаёт /api/info', mirrorBody.status === 200 && mirrorBody.data.includes('"GUILTY AS SOCK!"'));
+    // WebSocket через зеркало: зал создаётся тем же сервером (общие комнаты)
+    const mirrorWs = await new Promise((resolve, reject) => {
+      const w = new WebSocket(`ws://127.0.0.1:${mPort}/ws`);
+      const timer = setTimeout(() => { try { w.terminate(); } catch(e){} reject(new Error('зеркальный WS таймаут')); }, 4000);
+      w.on('message', (raw) => {
+        try {
+          const msg = JSON.parse(String(raw));
+          if(msg.t === 'created'){ clearTimeout(timer); w.close(); resolve(msg); }
+        } catch(e){ /* ignore */ }
+      });
+      w.on('open', () => w.send(JSON.stringify({ t:'create', name:'Тест' })));
+      w.on('error', (e) => { clearTimeout(timer); reject(e); });
+    });
+    ok('WebSocket через HTTP-зеркало создаёт зал', !!mirrorWs.room);
+    // Индекс отдаётся через зеркало
+    const mirrorIndex = await new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port: mPort, path: '/' }, (res) => {
+        let data = '';
+        res.on('data', (chunk) => data += chunk);
+        res.on('end', () => resolve({ status: res.statusCode, data }));
+      }).on('error', reject);
+    });
+    ok('HTTP-зеркало отдаёт игру (index.html)', mirrorIndex.status === 200 && mirrorIndex.data.includes('GUILTY AS SOCK'));
+  }
   await secureGame.close();
 } catch(e){
   ok('HTTPS-сервер поднимается', false);
