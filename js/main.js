@@ -9,6 +9,8 @@ import { createSock, animateSock, sockSay, sockGesture } from './sock.js';
 import { buildCourtroom, clearCourtroom } from './courtroom.js';
 import { drawHand, aiChooseCard, aiChooseStyle, persuasionScore, generatePresentLine, aiVote, generateHeadline, streamerVote } from './ai.js';
 import { sfx } from './audio.js';
+import { netSupported, isHosting, createRoom, sendState, leaveRoom, onPlayers, onChat, onBall, onVotes, onRoomClosed, currentRoom, currentPlayers, currentVotes, consumeBalls } from './net.js';
+import { initVoice, enableMic, disableMic, toggleMic, isMicOn, voiceSupported, voicePeerCount } from './voice.js';
 
 // ---------- utils ----------
 const $ = id => document.getElementById(id);
@@ -45,7 +47,7 @@ if(!save.settings) save.settings = { volume:80, sens:5, quality:'medium', subtit
 
 // ---------- DOM ----------
 const canvas = $('gameCanvas');
-const screens = ['loadingScreen','mainMenu','customizeScreen','decksScreen','lobbyScreen','howScreen','settingsScreen','pauseScreen','verdictScreen','matchEndScreen'];
+const screens = ['loadingScreen','mainMenu','customizeScreen','decksScreen','lobbyScreen','onlineScreen','howScreen','settingsScreen','pauseScreen','verdictScreen','matchEndScreen'];
 function showScreen(id){
   screens.forEach(s=>$(s).classList.toggle('active', s===id));
   if(!id) screens.forEach(s=>$(s).classList.remove('active'));
@@ -70,6 +72,161 @@ function unlockAchievement(id){
   setTimeout(()=>$('achievementToast').classList.add('hidden'), 3500);
 }
 
+// ---------- Online: зал с друзьями (host mode) ----------
+const netVotesEnabled = () => { const t = $('netVotesToggle'); return !t || t.checked; };
+let netBroadcastTimer = null;
+
+function netSnapshot(extra = {}){
+  const cd = gameState.caseData || {};
+  const cv = currentVotes();
+  return Object.assign({
+    caseNum: gameState.caseNum || 1,
+    caseTitle: cd.title || 'Дело носка',
+    crime: cd.crime || '', accused: cd.accused || '',
+    phase: gameState.phase, phaseLabel: ($('phaseChip')?.textContent) || '',
+    pros: Math.round(gameState.prosScore || 0),
+    def: Math.round(gameState.defScore || 0),
+    chaos: Math.round(gameState.chaos || 0),
+    matchWins: gameState.matchWins || 0,
+    matchLosses: gameState.matchLosses || 0,
+    votesGuilty: cv.guilty, votesInnocent: cv.innocent,
+    verdict: null, over: false,
+  }, extra);
+}
+function broadcastState(extra){
+  try { if(isHosting() && gameState.caseData) sendState(netSnapshot(extra)); } catch(e){ /* ignore */ }
+}
+function netFriendsCount(){
+  return currentPlayers().filter(p => !p.host).length;
+}
+function updateNetBox(){
+  const box = $('netBox'); if(!box) return;
+  const online = isHosting();
+  box.classList.toggle('hidden', !online);
+  updateMicButton();
+  if(!online) return;
+  $('netRoomCode').textContent = currentRoom() || '—';
+  $('netPlayerCount').textContent = netFriendsCount();
+  const cv = currentVotes();
+  $('netVotesGuilty').textContent = cv.guilty;
+  $('netVotesInnocent').textContent = cv.innocent;
+}
+function updateMicButton(){
+  const btn = $('btnMicHost'); if(!btn) return;
+  if(isMicOn()){
+    btn.classList.add('live');
+    btn.innerHTML = `🔴 Микрофон: В ЭФИРЕ <small>(${voicePeerCount()} слуш.) (M)</small>`;
+  } else {
+    btn.classList.remove('live');
+    btn.innerHTML = '🎙️ Микрофон: ВЫКЛ <small>(M)</small>';
+  }
+}
+async function toggleHostMic(){
+  if(!isHosting()){ toast('Сначала создай зал: 🌐 ИГРАТЬ С ДРУЗЬЯМИ'); return; }
+  if(!voiceSupported()){
+    toast('🎙️ Голос недоступен: нужен HTTPS и микрофон');
+    return;
+  }
+  try { await toggleMic(); }
+  catch(e){ toast('🎙️ ' + (e && e.message ? e.message : 'Нет доступа к микрофону')); }
+  updateMicButton();
+}
+function renderRoomPlayers(list){
+  const box = $('roomPlayers'); if(!box) return;
+  box.innerHTML = '';
+  for(const p of list){
+    const div = document.createElement('div');
+    div.className = 'room-player' + (p.host ? ' host' : '');
+    div.innerHTML = `<span>🧦</span><span></span><small></small>`;
+    div.children[1].textContent = p.name;
+    div.children[2].textContent = p.host ? 'хост' : 'присяжный';
+    box.appendChild(div);
+  }
+  const cnt = $('roomCount'); if(cnt) cnt.textContent = list.length;
+  updateNetBox();
+}
+function appendNetChat({ from, text, sys }){
+  // Дублируем реплики друзей в лог суда и в ленту чата зала
+  if(!sys) logCourt(`🌐 ${from}: ${String(text).slice(0,60)}`);
+  const lines = $('chatLines');
+  if(lines && !$('streamerChat').classList.contains('hidden')){
+    const div = document.createElement('div');
+    div.textContent = `💬 ${from}: ${text}`;
+    lines.appendChild(div);
+    while(lines.children.length > 7) lines.removeChild(lines.firstChild);
+  }
+}
+function initNet(){
+  onPlayers(list => renderRoomPlayers(list));
+  onChat(msg => appendNetChat(msg));
+  onBall(() => { /* шары забираются в animate() через consumeBalls() */ });
+  onVotes(() => {
+    updateNetBox();
+    const cv = currentVotes();
+    const tot = Math.max(1, cv.total);
+    if(isHosting()){
+      $('chatGuilty').textContent = Math.round(cv.guilty / tot * 100) + '%';
+      $('chatInnocent').textContent = Math.round(cv.innocent / tot * 100) + '%';
+    }
+  });
+  onRoomClosed(reason => {
+    toast('🌐 ' + reason);
+    try { disableMic(); } catch(e){ /* ignore */ }
+    $('netBox').classList.add('hidden');
+    resetRoomUI();
+  });
+  // Периодическая рассылка снимка суда (чтобы телефоны дружно жили)
+  netBroadcastTimer = setInterval(() => broadcastState(), 2000);
+}
+function resetRoomUI(){
+  try { disableMic(); } catch(e){ /* ignore */ }
+  leaveRoom();
+  $('roomInfo')?.classList.add('hidden');
+  $('btnCreateRoom')?.classList.remove('hidden');
+  $('netBox')?.classList.add('hidden');
+}
+function openOnlineScreen(){
+  showScreen('onlineScreen');
+  const warn = $('onlineWarn');
+  const ok = netSupported() && typeof location !== 'undefined' && !!location.host;
+  if(warn){
+    warn.classList.toggle('hidden', ok);
+    if(!ok) warn.innerHTML = '⚠️ Онлайн работает только при запуске через <b>npm start</b> или <b>EXE-версию</b> — не из двойного клика по файлу.';
+  }
+  $('btnCreateRoom')?.classList.toggle('hidden', isHosting());
+  $('roomInfo')?.classList.toggle('hidden', !isHosting());
+  if(isHosting()) fillRoomInfo(currentRoom());
+}
+async function fillRoomInfo(room){
+  const scheme = (typeof location !== 'undefined' && location.protocol === 'https:') ? 'https' : 'http';
+  $('roomCode').textContent = room || '—';
+  let url = `${scheme}://localhost:${location.port || 8080}/juror.html?room=${room}`;
+  try {
+    const info = await fetch('/api/info').then(r => r.json()).catch(() => null);
+    if(info && Array.isArray(info.ips) && info.ips.length){
+      const port = info.port || location.port || (scheme === 'https' ? 8080 : 80);
+      url = `${scheme}://${info.ips[0]}:${port}/juror.html?room=${room}`;
+    }
+  } catch(e) { /* оставим localhost */ }
+  $('roomUrl').textContent = url;
+  renderRoomPlayers(currentPlayers());
+}
+function spawnNetBall(fromName){
+  const ball = paperBalls.find(b => !b.userData.active);
+  if(!ball) return;
+  ball.visible = true; ball.userData.active = true; ball.userData.fromPlayer = false; ball.userData.life = 7;
+  // Комок летит с трибуны (от друзей-присяжных) в выступающего
+  ball.position.set(rand(-8, 8), rand(3.6, 4.6), rand(4.5, 7.5));
+  const targetObj = (gameState.speaking && gameState.speaking.mesh) ? gameState.speaking.mesh : playerSock;
+  const target = targetObj ? targetObj.position.clone().add(new THREE.Vector3(0, 1.5, 0)) : new THREE.Vector3(0, 1.5, 0);
+  const dir = target.sub(ball.position).normalize();
+  ball.userData.vel.copy(dir.multiplyScalar(15.5));
+  ball.userData.vel.y += 1.2;
+  ball.userData.spin.set(rand(-9, 9), rand(-9, 9), rand(-9, 9));
+  sfx.paper();
+  logCourt(`🌐 ${fromName} кинул бумажный комок из зала!`);
+}
+
 // ---------- Three setup ----------
 let renderer, scene, camera, clock;
 let court = null;
@@ -77,6 +234,9 @@ let playerSock = null;
 let aiSocks = []; // {mesh, role, name, hand, prosScore, defScore, isPlayer}
 let paperBalls = [];
 let confetti = [];
+let fxParticles = [];
+let floaters = [];
+let dustCloud = null;
 let gameState = {
   phase:'menu', caseData:null, caseNum:1, matchWins:0, matchLosses:0,
   prosScore:0, defScore:0, chaos:0, paperLeft:5, round:0,
@@ -88,7 +248,7 @@ let shakeAmt = 0;
 function addShake(v){ shakeAmt = Math.min(0.55, shakeAmt + v); }
 const player = {
   pos: new THREE.Vector3(0,1.7,8), vel: new THREE.Vector3(), yaw:0, pitch:0,
-  onGround:true, keys:{}, locked:false,
+  onGround:true, keys:{}, locked:false, bobPhase:0, stepAcc:0, _moving:false,
 };
 const colliders = [
   {minX:-4.3,maxX:4.3,minZ:-10.4,maxZ:-8.6}, // bench
@@ -108,7 +268,7 @@ function initThree(){
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.1;
+  renderer.toneMappingExposure = 1.18;
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a0914);
@@ -122,10 +282,14 @@ function initThree(){
   buildCourt();
   buildPlayerSock();
   buildPaperPool();
+  buildDust();
   animate();
 }
 
-function requestLock(){ /* free mouse-look: no pointer lock needed */ player.locked = true; }
+function requestLock(){
+  try{ canvas.requestPointerLock?.(); }catch(e){ /* не вышло — остаётся обычный режим */ }
+  player.locked = document.pointerLockElement === canvas;
+}
 function onResize(){
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
@@ -200,9 +364,11 @@ function updatePaper(dt){
         b.userData.active=false; b.visible=false;
         sfx.paperHit();
         addChaos(5);
+        spawnSparks(b.position.clone(), 0xfff3b0, 12);
         if(!b.userData.fromPlayer) addShake(0.12);
         if(b.userData.fromPlayer){
           gameState.paperHits++;
+          spawnFloater('+10', '#ffd166', b.position.clone().add(new THREE.Vector3(0,0.7,0)));
           if(gameState.paperHits>=10) unlockAchievement('paper_master');
           save.score += 10; storeSave(); updateHudScore();
         }
@@ -335,9 +501,22 @@ function allSocks(){ return aiSocks; }
 // ---------- Player movement ----------
 function syncCamera(){
   camera.position.copy(player.pos);
+  // Головная качка при ходьбе + лёгкий наклон корпуса
+  if(player._moving && player.onGround){
+    camera.position.y += Math.sin(player.bobPhase*2)*0.05;
+    camera.rotation.z = Math.sin(player.bobPhase)*0.014;
+  } else {
+    camera.rotation.z = 0;
+  }
   camera.rotation.order = 'YXZ';
   camera.rotation.y = player.yaw;
   camera.rotation.x = player.pitch;
+  // FOV-кик при беге
+  const targetFov = 72 + ((player.keys['shift'] && player._moving) ? 5 : 0);
+  if(Math.abs(camera.fov - targetFov) > 0.05){
+    camera.fov += (targetFov - camera.fov)*0.18;
+    camera.updateProjectionMatrix();
+  }
 }
 function updatePlayer(dt){
   if(gameState.phase==='menu' || gameState.phase==='verdict' || gameState.paused) return;
@@ -355,12 +534,18 @@ function updatePlayer(dt){
     move.add(right.clone().multiplyScalar(touch.move.x));
   }
   if(move.lengthSq()>0){
+    const sprinting = !!player.keys['shift'];
+    player._moving = true;
     move.normalize().multiplyScalar(speed*dt);
     player.pos.add(move);
+    player.bobPhase += dt*speed*(sprinting?1.75:1.45);
+    player.stepAcc += speed*dt;
+    if(player.stepAcc > 2.3 && player.onGround){ player.stepAcc = 0; sfx.step(); }
     playerSock.position.x = player.pos.x; playerSock.position.z = player.pos.z;
     playerSock.position.y = Math.abs(Math.sin(performance.now()*0.008))*0.06;
     playerSock.rotation.y = player.yaw + Math.PI;
   } else {
+    player._moving = false;
     playerSock.position.x = player.pos.x; playerSock.position.z = player.pos.z;
     playerSock.position.y = Math.sin(performance.now()*0.002)*0.03;
     playerSock.rotation.y = player.yaw + Math.PI;
@@ -460,7 +645,10 @@ function doObjection(){
   flash.style.opacity = '0.55';
   setTimeout(()=>{ flash.style.opacity = '0'; }, 180);
   const me = aiSocks.find(s=>s.isPlayer);
-  if(me) speakBy(me, pick(LINES.objection), 1800, '✋ Возражение!');
+  if(me){
+    speakBy(me, pick(LINES.objection), 1800, '✋ Возражение!');
+    if(me.mesh && me.mesh.position) spawnSparks(me.mesh.position.clone().add(new THREE.Vector3(0,2,0)), 0xff5f6d, 18);
+  }
   save.score += 15; storeSave(); updateHudScore();
 }
 function doGavel(){
@@ -509,6 +697,7 @@ function playerPresent(){
   const vars = { crime: gameState.caseData.crime, accused: gameState.caseData.accused };
   const line = generatePresentLine(card, style, vars);
   speakBy(me, line, 3400, `${STYLES[style].emoji} ${STYLES[style].name} • +${score} убедительности`);
+  if(me && me.mesh && me.mesh.position) spawnFloater('+'+Math.round(score), '#7bf1a8', me.mesh.position.clone().add(new THREE.Vector3(0,2.6,0)));
   sfx.present(); addChaos(STYLES[style].chaos*2);
   if(gameState.playerRole==='prosecutor') gameState.prosScore += score;
   else if(gameState.playerRole==='defense') gameState.defScore += score;
@@ -534,6 +723,7 @@ function playerPresent(){
 function setPhase(p, label){
   gameState.phase = p;
   $('phaseChip').textContent = label;
+  broadcastState();
 }
 async function runTrial(token){
   const cd = gameState.caseData;
@@ -570,6 +760,7 @@ async function runTrial(token){
       speakBy(pros, generatePresentLine(card, style, vars), 3600, `${STYLES[style].emoji} ${STYLES[style].name} • +${score}`);
       sfx.present(); addChaos(STYLES[style].chaos);
       gameState.prosScore += score;
+      if(pros.mesh && pros.mesh.position) spawnFloater('+'+Math.round(score), '#ff9aa4', pros.mesh.position.clone().add(new THREE.Vector3(0,2.5,0)));
       pros.hand = pros.hand.filter(c=>c!==card);
       logCourt(`🃏 Прокурор: ${card.name} (+${score})`);
       await sleep(3200); if(!alive()) return;
@@ -589,6 +780,7 @@ async function runTrial(token){
       speakBy(def, generatePresentLine(card, style, vars), 3600, `${STYLES[style].emoji} ${STYLES[style].name} • +${score}`);
       sfx.present(); addChaos(STYLES[style].chaos);
       gameState.defScore += score;
+      if(def.mesh && def.mesh.position) spawnFloater('+'+Math.round(score), '#8df0e4', def.mesh.position.clone().add(new THREE.Vector3(0,2.5,0)));
       def.hand = def.hand.filter(c=>c!==card);
       logCourt(`🃏 Адвокат: ${card.name} (+${score})`);
       await sleep(3200); if(!alive()) return;
@@ -657,6 +849,11 @@ async function runVoting(token){
     $('chatGuilty').textContent = sv.guilty+'%'; $('chatInnocent').textContent = sv.innocent+'%';
     streamerBias = (sv.guilty-50)/25;
     logCourt(`🔴 Чат: ${sv.guilty}% за «виновен»`);
+  } else if(isHosting()){
+    const cv = currentVotes();
+    const tot = Math.max(1, cv.total);
+    $('chatGuilty').textContent = Math.round(cv.guilty/tot*100)+'%';
+    $('chatInnocent').textContent = Math.round(cv.innocent/tot*100)+'%';
   }
   // Jurors vote
   const jurors = aiSocks.filter(s=>s.role==='juror');
@@ -680,6 +877,27 @@ async function runVoting(token){
       const v = aiVote(gameState.prosScore, gameState.defScore, j.charisma, gameState.chaos, streamerBias);
       gameState.votes.push({ name:j.name, guilty:v });
       await sleep(400);
+    }
+  }
+  // Онлайн-присяжные: ждём голоса друзей до 8 секунд (или пока все не проголосуют)
+  if(isHosting()){
+    const friends = netFriendsCount();
+    if(friends > 0){
+      toast('🌐 Ждём голоса друзей… (до 8 сек)');
+      broadcastState();
+      const t0 = Date.now();
+      while(Date.now() - t0 < 8000){
+        if(!alive()) return;
+        if(currentVotes().total >= friends) break;
+        await sleep(300);
+      }
+      if(netVotesEnabled()){
+        const cv = currentVotes();
+        for(const v of cv.voters) gameState.votes.push({ name:'🌐 ' + v.name, guilty: !!v.guilty, net: true });
+        if(cv.total) logCourt(`🌐 Онлайн-голоса: виновен ${cv.guilty} • невиновен ${cv.innocent}`);
+      } else if(currentVotes().total){
+        logCourt('🌐 Голоса друзей не учитываются (отключено в окне «ИГРАТЬ С ДРУЗЬЯМИ»)');
+      }
     }
   }
   if(gameState.votes.length===0){
@@ -739,6 +957,7 @@ async function showVerdict(guilty, token){
   document.exitPointerLock?.();
   showScreen('verdictScreen');
   gameState.phase='verdict';
+  broadcastState({ verdict: guilty ? 'guilty' : 'innocent' });
 
   // Match end?
   if(gameState.matchWins>=3 || gameState.matchLosses>=3){
@@ -765,6 +984,86 @@ function updateConfetti(dt){
     c.rotation.x += c.userData.rot*dt; c.rotation.y += c.userData.rot*dt;
     if(c.position.y<0.1){ scene.remove(c); confetti.splice(i,1); }
   }
+}
+
+// ---------- FX: искры, всплывающий текст, пыль ----------
+function spawnSparks(pos, colorHex=0xffd166, n=16){
+  const geo = new THREE.OctahedronGeometry(0.09);
+  const colors = [0xffe066, 0xffd166, 0xff9f1c, colorHex];
+  for(let i=0;i<n;i++){
+    const mat = new THREE.MeshBasicMaterial({ color: pick(colors) });
+    const m = new THREE.Mesh(geo, mat);
+    m.position.copy(pos);
+    const a = Math.random()*Math.PI*2;
+    m.userData.vel = new THREE.Vector3(Math.cos(a)*(2+Math.random()*3.2), 2+Math.random()*3.5, Math.sin(a)*(2+Math.random()*3.2));
+    m.userData.life = 0.85+Math.random()*0.45;
+    m.userData.maxLife = m.userData.life;
+    m.userData.spin = Math.random()*9;
+    scene.add(m); fxParticles.push(m);
+  }
+}
+function updateFxParticles(dt){
+  for(let i=fxParticles.length-1;i>=0;i--){
+    const p = fxParticles[i];
+    p.userData.life -= dt;
+    if(p.userData.life <= 0){ scene.remove(p); p.material.dispose?.(); fxParticles.splice(i,1); continue; }
+    p.userData.vel.y -= 12*dt;
+    p.position.addScaledVector(p.userData.vel, dt);
+    p.rotation.x += p.userData.spin*dt; p.rotation.y += p.userData.spin*dt;
+    p.scale.setScalar(Math.max(0.01, p.userData.life/p.userData.maxLife));
+  }
+}
+function spawnFloater(text, color='#ffd166', at=null){
+  try{
+    const c = document.createElement('canvas'); c.width = 256; c.height = 96;
+    const g = c.getContext('2d');
+    if(g){
+      g.font = '900 50px Arial'; g.textAlign = 'center';
+      g.lineWidth = 8; g.strokeStyle = 'rgba(0,0,0,.85)';
+      if(g.strokeText) g.strokeText(text, 128, 62);
+      g.fillStyle = color; g.fillText(text, 128, 62);
+    }
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+    const spr = new THREE.Sprite(mat);
+    spr.scale.set(1.7, 0.64, 1);
+    const base = at || (playerSock ? playerSock.position.clone().add(new THREE.Vector3(0, 2.7, 0)) : new THREE.Vector3(0, 2.6, 0));
+    spr.position.copy(base);
+    scene.add(spr);
+    floaters.push({ spr, life: 1.5, vy: 1.15 });
+  }catch(e){ /* вне браузера — тихо пропускаем */ }
+}
+function updateFloaters(dt){
+  for(let i=floaters.length-1;i>=0;i--){
+    const f = floaters[i]; f.life -= dt;
+    if(f.life <= 0){
+      scene.remove(f.spr);
+      try { f.spr.material.map?.dispose?.(); f.spr.material.dispose?.(); } catch(e){ /* ignore */ }
+      floaters.splice(i,1); continue;
+    }
+    f.spr.position.y += f.vy*dt; f.vy *= (1-0.7*dt);
+    f.spr.material.opacity = Math.min(1, f.life/0.7);
+  }
+}
+function buildDust(){
+  const N = 90;
+  const pos = new Float32Array(N*3);
+  for(let i=0;i<N;i++){ pos[i*3]=rand(-13,13); pos[i*3+1]=rand(0.6,7.2); pos[i*3+2]=rand(-11,11); }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({ color:0xffe9b0, size:0.055, transparent:true, opacity:0.5, blending:THREE.AdditiveBlending, depthWrite:false, sizeAttenuation:true });
+  dustCloud = new THREE.Points(geo, mat);
+  dustCloud.name = 'dustCloud';
+  scene.add(dustCloud);
+}
+function updateDust(t){
+  if(!dustCloud) return;
+  dustCloud.rotation.y = t*0.012;
+  const pos = dustCloud.geometry.attributes.position;
+  for(let i=0;i<pos.count;i++){
+    pos.setY(i, pos.getY(i) + Math.sin(t*0.5 + i*1.7)*0.0016);
+  }
+  pos.needsUpdate = true;
 }
 
 // ---------- Case / match ----------
@@ -812,11 +1111,17 @@ function nextCase(quick=false){
   showScreen(null);
   updateHudScore();
   logCourt(`📁 Новое дело: ${cd.title}`);
-  if(gameState.streamer){
+  const online = isHosting();
+  if(gameState.streamer || online){
     $('streamerChat').classList.remove('hidden');
-    if(save.achievements && !save.achievements.streamer) unlockAchievement('streamer');
-    startChatSim();
+    $('streamerChatTitle').textContent = online ? '🌐 ЗАЛ В ЭФИРЕ — ЧАТ ДРУЗЕЙ' : '🔴 ЧАТ СТРИМА';
+    $('chatVoteLabel').textContent = online ? 'Зал' : 'Чат';
+    if(gameState.streamer && save.achievements && !save.achievements.streamer) unlockAchievement('streamer');
+    if(gameState.streamer) startChatSim(); else clearInterval(chatInterval);
+    if(online) logCourt(`🌐 Зал онлайн: код ${currentRoom()} — друзья уже видят суд!`);
   } else $('streamerChat').classList.add('hidden');
+  updateNetBox();
+  broadcastState();
   // Lock pointer on user gesture chain (button click) — request lock
   setTimeout(()=>{ requestLock(); }, 200);
   runTrial(token).catch(e=>{ if(!(e instanceof TrialEnd)) console.error(e); });
@@ -880,7 +1185,7 @@ function startChatSim(){
 
 // ---------- Pause ----------
 function pauseGame(auto=false){
-  if(gameState.phase==='menu'||gameState.phase==='verdict') return;
+  if(gameState.phase==='menu'||gameState.phase==='verdict'||gameState.paused) return;
   gameState.paused = true;
   showScreen('pauseScreen');
   document.exitPointerLock?.();
@@ -981,6 +1286,12 @@ function animate(){
     }
   }
 
+  updateFxParticles(dt);
+  updateFloaters(dt);
+  updateDust(t);
+  if(isHosting()){
+    for(const ev of consumeBalls()) spawnNetBall(ev.from);
+  }
   updatePaper(dt);
   updateConfetti(dt);
   updateAiWander(dt);
@@ -996,24 +1307,38 @@ function initInput(){
     if(k==='e') doInteract();
     if(k==='q') doGavel();
     if(k==='r') doObjection();
+    if(k==='m' && !/^(input|textarea)$/i.test((e.target && e.target.tagName) || '')) { toggleHostMic(); }
     if(k==='escape' && gameState.phase!=='menu' && gameState.phase!=='verdict'){
+      // Пока мышь захвачена, Esc отдаём браузеру (он отпустит захват) —
+      // паузу откроет обработчик pointerlockchange. Иначе — переключаем сами.
+      if(document.pointerLockElement === canvas) return;
       if(gameState.paused) resumeGame(); else pauseGame();
     }
   });
   window.addEventListener('keyup', e=>{ player.keys[e.key.toLowerCase()]=false; });
-  // Free mouse-look: cursor over the 3D canvas steers the camera, cursor over HUD stays clickable.
+  // FPS-look: клик по залу захватывает мышь; Esc (браузер) отпускает.
+  // Без захвата — старый режим: обзор, пока курсор над сценой.
   window.addEventListener('mousemove', e=>{
+    const locked = document.pointerLockElement === canvas;
     if(!$('hud').classList.contains('hidden') && !gameState.paused &&
        !['menu','verdict'].includes(gameState.phase) &&
-       e.target && e.target.id === 'gameCanvas'){
-      const sens = 0.0024 * (save.settings.sens||5)/5;
+       (locked || (e.target && e.target.id === 'gameCanvas'))){
+      const sens = 0.0024 * (save.settings.sens||5)/5 * (locked ? 1.15 : 1);
       player.yaw -= (e.movementX||0) * sens;
       player.pitch = clamp(player.pitch - (e.movementY||0)*sens, -1.35, 1.35);
     }
   });
+  document.addEventListener('pointerlockchange', ()=>{
+    player.locked = document.pointerLockElement === canvas;
+    const ch = $('crosshair'); if(ch) ch.classList.toggle('locked-look', player.locked);
+    // Потеряли захват в разгаре суда → сама пауза (Esc браузера поглощает наш keydown).
+    if(!player.locked && !gameState.paused && !['menu','verdict'].includes(gameState.phase)) pauseGame(true);
+  });
   document.addEventListener('mousedown', e=>{
     if(e.button!==0) return;
-    if(!$('hud').classList.contains('hidden') && !gameState.paused && e.target && e.target.id==='gameCanvas'){
+    const overCanvas = (document.pointerLockElement === canvas) || (e.target && e.target.id==='gameCanvas');
+    if(!$('hud').classList.contains('hidden') && !gameState.paused && overCanvas){
+      if(document.pointerLockElement !== canvas && e.target && e.target.id==='gameCanvas') requestLock();
       throwPaper(true);
     }
   });
@@ -1035,11 +1360,51 @@ function initUI(){
 
   // Menu buttons
   $('btnPlay').addEventListener('click', ()=>{ sfx.click(); openLobby(); });
+  $('btnOnline').addEventListener('click', ()=>{ sfx.click(); openOnlineScreen(); });
   $('btnQuick').addEventListener('click', ()=>{ sfx.click(); startMatch(true); });
   $('btnCustomize').addEventListener('click', ()=>{ sfx.click(); showScreen('customizeScreen'); refreshCustomizeUI(); });
   $('btnDecks').addEventListener('click', ()=>{ sfx.click(); showScreen('decksScreen'); renderDecks(); });
   $('btnHow').addEventListener('click', ()=>{ sfx.click(); showScreen('howScreen'); });
   $('btnSettings').addEventListener('click', ()=>{ sfx.click(); showScreen('settingsScreen'); refreshSettingsUI(); });
+  // Online screen
+  $('btnCreateRoom').addEventListener('click', async ()=>{
+    sfx.click();
+    const btn = $('btnCreateRoom');
+    btn.disabled = true; btn.textContent = '🏛️ Создаём зал…';
+    const res = await createRoom(save.sock.name || 'Хост');
+    btn.disabled = false; btn.textContent = '🏛️ СОЗДАТЬ ЗАЛ';
+    if(!res.ok){
+      const warn = $('onlineWarn'); warn.classList.remove('hidden'); warn.textContent = '⚠️ ' + res.error;
+      return;
+    }
+    $('btnCreateRoom').classList.add('hidden');
+    $('roomInfo').classList.remove('hidden');
+    sfx.fanfare();
+    fillRoomInfo(res.room);
+    updateNetBox();
+    // 🎙️ Голос хоста — автоматически (клик по кнопке = жест пользователя)
+    initVoice();
+    if(voiceSupported()){
+      try { await enableMic(); toast('🎙️ Голос включён — друзья тебя слышат!'); }
+      catch(e){ toast('🎙️ Микрофон не дан — друзья слышать тебя не будут'); }
+      updateMicButton();
+    } else {
+      toast('🎙️ Голос недоступен (нужен HTTPS) — друзья сыграют в «немом» режиме');
+    }
+    toast('🌐 Зал создан! Отправь друзьям ссылку и код.');
+  });
+  $('btnCopyUrl').addEventListener('click', async ()=>{
+    const url = $('roomUrl').textContent.trim();
+    try { await navigator.clipboard.writeText(url); toast('📋 Ссылка скопирована!'); }
+    catch(e){
+      const ta = document.createElement('textarea'); ta.value = url; document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); toast('📋 Ссылка скопирована!'); } catch(e2){ toast('Выдели ссылку и скопируй вручную'); }
+      ta.remove();
+    }
+  });
+  $('btnCloseRoom').addEventListener('click', ()=>{ sfx.click(); resetRoomUI(); toast('🏳️ Зал закрыт'); });
+  $('btnMicHost').addEventListener('click', ()=>{ sfx.click(); toggleHostMic(); });
   document.querySelectorAll('.btn-close').forEach(b=>b.addEventListener('click', ()=>{
     sfx.click();
     if(returnToPause && gameState.phase!=='menu' && gameState.phase!=='verdict'){ returnToPause=false; showScreen('pauseScreen'); }
@@ -1148,6 +1513,7 @@ function quitToMenu(){
   playerSock.position.set(0,0,6); player.pos.set(0,1.7,8);
   showScreen('mainMenu'); updateHudScore();
   document.exitPointerLock?.();
+  broadcastState({ verdict: null, over: false });
 }
 function showMatchEnd(){
   const won = gameState.matchWins>=3;
@@ -1161,6 +1527,7 @@ function showMatchEnd(){
     <div><b>${save.wins}</b>Побед</div>
     <div><b>${save.cases}</b>Дел сыграно</div>`;
   showScreen('matchEndScreen');
+  broadcastState({ over: true, verdict: won ? 'guilty' : 'innocent' });
   if(won){ sfx.fanfare(); spawnConfetti(); }
 }
 
@@ -1252,6 +1619,8 @@ try{
   initInput();
   initTouch();
   initUI();
+  initNet();
+  initVoice();
 }catch(err){
   console.error(err);
   $('loadText').textContent = 'Ошибка загрузки: ' + err.message + ' — проверь интернет (нужен CDN Three.js)';

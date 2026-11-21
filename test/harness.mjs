@@ -15,7 +15,9 @@ const fake2d = () => new Proxy({
   canvas: null, fillStyle: '#000', strokeStyle: '#000', font: '', textAlign: '', lineWidth: 1, globalAlpha: 1,
   fillRect(){}, strokeRect(){}, clearRect(){}, fillText(){}, beginPath(){}, arc(){}, ellipse(){},
   moveTo(){}, lineTo(){}, stroke(){}, fill(){}, save(){}, restore(){}, translate(){}, rotate(){},
-  createLinearGradient(){ return { addColorStop(){} }; }, drawImage(){}, measureText(){ return { width: 10 }; },
+  createLinearGradient(){ return { addColorStop(){} }; },
+  createRadialGradient(){ return { addColorStop(){} }; },
+  drawImage(){}, measureText(){ return { width: 10 }; },
 }, { get(t, k){ return k in t ? t[k] : () => {}; }, set(t, k, v){ t[k] = v; return true; } });
 window.HTMLCanvasElement.prototype.getContext = function(type){
   if(type === '2d'){ const c = fake2d(); c.canvas = this; return c; }

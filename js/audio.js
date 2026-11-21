@@ -55,6 +55,8 @@ export class SoundFX {
   click(){ this.tone(800,0.05,'sine',0.2,0,1000); }
   present(){ this.tone(523,0.12,'triangle',0.3,0); this.tone(784,0.2,'triangle',0.3,0.1); }
   jump(){ this.tone(300,0.15,'sine',0.2,0,600); }
+  step(){ this.noise(0.05,0.1,0,650+Math.random()*250); }
+  spark(){ this.noise(0.12,0.18,0,3300); this.tone(1500,0.08,'triangle',0.12,0,2600); }
   talk(){ this.tone(200+Math.random()*200,0.07,'square',0.08,0,150); }
 }
 export const sfx = new SoundFX();
