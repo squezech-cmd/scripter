@@ -21,6 +21,15 @@ https://launchpad.net/ubuntu/bionic/+source/nvidia-cg-toolkit/+copyright
 7-Zip LZMA SDK self-extractor, by Igor Pavlov, is in the public domain:
 https://www.7-zip.org/sdk.html
 
+websockets 15.0.1, BSD 3-Clause: websockets-BSD.txt;
+source: https://github.com/python-websockets/websockets/tree/15.0.1
+
+cloudflared 2026.10.6, Apache 2.0: cloudflared-APACHE-2.0.txt;
+source: https://github.com/cloudflare/cloudflared/tree/2026.10.6
+The official release executable is included unmodified and is launched only
+when the player explicitly creates an internet room. Quick Tunnels are a
+third-party, temporary service with no uptime guarantee.
+
 DejaVu fonts: see ../fonts/LICENSE-DejaVu.txt.
 
 CC0 character models and animations: see CC0-characters.txt and CC0-1.0.txt.

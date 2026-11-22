@@ -1,0 +1,123 @@
+name: Packaged Windows internet co-op
+
+on:
+  push:
+    paths:
+      - BurgerShift.exe
+      - .github/workflows/internet-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+# Two separate hosted Windows machines run the actual extracted EXE. The host
+# uploads only a short-lived test-room invitation; it is invalid after the job.
+jobs:
+  host:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract and verify the shipped game
+        shell: pwsh
+        run: |
+          $app = Join-Path $env:RUNNER_TEMP 'burger-app'
+          & "$env:ProgramFiles\7-Zip\7z.exe" x BurgerShift.exe "-o$app" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Could not extract BurgerShift.exe' }
+          if (!(Test-Path "$app\BurgerShiftGame.exe")) { throw 'Game executable missing' }
+          $connector = "$app\cloudflared.exe"
+          if (!(Test-Path $connector)) { throw 'Cloudflare connector missing' }
+          if ((Get-FileHash -Algorithm SHA256 $connector).Hash.ToLower() -ne 'd521b3bf68982165f0d06d76732f22d9a105ef057ff3ae4c0986f3a23190950f') {
+            throw 'Bundled Cloudflare connector failed hash check'
+          }
+      - name: Start a temporary internet test room
+        shell: pwsh
+        run: |
+          $app = Join-Path $env:RUNNER_TEMP 'burger-app'
+          $invite = Join-Path $env:RUNNER_TEMP 'burger-invite.txt'
+          $result = Join-Path $env:RUNNER_TEMP 'burger-host-result.json'
+          $arguments = @('--test-coop', 'host', '--test-invitation', "`"$invite`"", '--test-result', "`"$result`"", '--test-timeout', '360')
+          $process = Start-Process -FilePath "$app\BurgerShiftGame.exe" -ArgumentList $arguments -PassThru
+          $process.Id | Set-Content (Join-Path $env:RUNNER_TEMP 'burger-host-pid.txt')
+          $deadline = (Get-Date).AddSeconds(110)
+          while (!(Test-Path $invite) -and (Get-Date) -lt $deadline) {
+            if (Test-Path $result) { Get-Content $result; throw 'Host diagnostic failed before the invitation was ready' }
+            $process.Refresh()
+            if ($process.HasExited) {
+              if (Test-Path "$env:APPDATA\BurgerShiftDiner\game.log") { Get-Content "$env:APPDATA\BurgerShiftDiner\game.log" }
+              throw "Host game exited before starting the tunnel ($($process.ExitCode))"
+            }
+            Start-Sleep -Seconds 2
+          }
+          if (!(Test-Path $invite)) { throw 'Timed out starting the tunnel' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coop-smoke-invitation-${{ github.run_id }}
+          path: ${{ runner.temp }}/burger-invite.txt
+          retention-days: 1
+          if-no-files-found: error
+      - name: Verify synchronized guest action and chat
+        shell: pwsh
+        run: |
+          $result = Join-Path $env:RUNNER_TEMP 'burger-host-result.json'
+          $deadline = (Get-Date).AddMinutes(6)
+          while (!(Test-Path $result) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (!(Test-Path $result)) {
+            if (Test-Path "$env:APPDATA\BurgerShiftDiner\game.log") { Get-Content "$env:APPDATA\BurgerShiftDiner\game.log" }
+            throw 'Host diagnostic did not finish'
+          }
+          $data = Get-Content $result -Raw | ConvertFrom-Json
+          $data | ConvertTo-Json -Depth 8
+          if (!$data.ok) { throw 'Host internet co-op diagnostic failed' }
+
+  guest:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract the shipped game
+        shell: pwsh
+        run: |
+          $app = Join-Path $env:RUNNER_TEMP 'burger-app'
+          & "$env:ProgramFiles\7-Zip\7z.exe" x BurgerShift.exe "-o$app" -y | Out-Null
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path "$app\BurgerShiftGame.exe")) { throw 'Could not extract BurgerShift.exe' }
+      - name: Get the temporary test invitation
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $artifact = "coop-smoke-invitation-$env:GITHUB_RUN_ID"
+          $deadline = (Get-Date).AddMinutes(5)
+          $found = $false
+          while ((Get-Date) -lt $deadline) {
+            $ids = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts" --jq ".artifacts[] | select(.name==`"$artifact`") | .id"
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot list the workflow artifacts' }
+            if ($ids) { $found = $true; break }
+            Start-Sleep -Seconds 5
+          }
+          if (!$found) { throw 'The host did not publish a test invitation' }
+          $directory = Join-Path $env:RUNNER_TEMP 'burger-invite'
+          gh run download $env:GITHUB_RUN_ID --repo $env:GITHUB_REPOSITORY --name $artifact --dir $directory
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path "$directory\burger-invite.txt")) { throw 'Cannot download the test invitation' }
+      - name: Join from this separate Windows runner
+        shell: pwsh
+        run: |
+          $app = Join-Path $env:RUNNER_TEMP 'burger-app'
+          $invite = Join-Path $env:RUNNER_TEMP 'burger-invite\burger-invite.txt'
+          $result = Join-Path $env:RUNNER_TEMP 'burger-guest-result.json'
+          $arguments = @('--test-coop', 'guest', '--test-invitation', "`"$invite`"", '--test-result', "`"$result`"", '--test-timeout', '180')
+          $process = Start-Process -FilePath "$app\BurgerShiftGame.exe" -ArgumentList $arguments -PassThru
+          $deadline = (Get-Date).AddMinutes(4)
+          while (!(Test-Path $result) -and (Get-Date) -lt $deadline) {
+            $process.Refresh()
+            if ($process.HasExited) {
+              if (Test-Path "$env:APPDATA\BurgerShiftDiner\game.log") { Get-Content "$env:APPDATA\BurgerShiftDiner\game.log" }
+              throw "Guest game exited without a diagnostic result ($($process.ExitCode))"
+            }
+            Start-Sleep -Seconds 2
+          }
+          if (!(Test-Path $result)) { throw 'Guest diagnostic did not finish' }
+          $data = Get-Content $result -Raw | ConvertFrom-Json
+          $data | ConvertTo-Json -Depth 8
+          if (!$data.ok) { throw 'Guest internet co-op diagnostic failed' }

@@ -1,10 +1,9 @@
-"""Host-authoritative co-op over a bounded, newline-delimited JSON/TCP protocol.
+"""Host-authoritative co-op using bounded newline-delimited JSON messages.
 
-No relay, accounts or cloud service are required. One player hosts a trusted
-room and all peers, including the host, use the same protocol. Only the host
-advances cooking and orders; each player has a separate inventory. The network
-thread never touches Panda3D objects. The protocol is intentionally not
-encrypted, so rooms should only be opened to people the host trusts.
+LAN uses direct TCP; internet rooms may carry the same protocol over a secure
+WebSocket to a third-party relay. Only the host advances cooking and orders;
+each player has a separate inventory. Network threads never touch Panda3D.
+Direct TCP is not encrypted, and all rooms are intended for trusted players.
 """
 from __future__ import annotations
 
@@ -496,12 +495,15 @@ class CoopServer:
 
 class CoopClient:
     """Non-blocking client; all UI-facing events are delivered via poll()."""
-    def __init__(self, host: str, port: int, name: str, code: str, host_token: str = ''):
+    def __init__(self, host: str, port: int, name: str, code: str, host_token: str = '',
+                 websocket_url: str | None = None):
         self.host, self.port = host, int(port)
+        self.websocket_url = websocket_url
         self._stop = threading.Event()
         self._send_queue: queue.Queue[bytes] = queue.Queue(maxsize=256)
         self._events: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=256)
         self._socket: socket.socket | None = None
+        self._websocket = None
         self._initial = _encode({'type': 'join', 'protocol': PROTOCOL_VERSION,
                                  'name': _text(name, 18), 'code': code, 'host_token': host_token})
         self._thread = threading.Thread(target=self._run, name='burger-coop-client', daemon=True)
@@ -532,6 +534,11 @@ class CoopClient:
                 self._socket.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+        if self._websocket:
+            try:
+                self._websocket.close()
+            except OSError:
+                pass
         if threading.current_thread() is not self._thread:
             self._thread.join(timeout=1.0)
 
@@ -546,7 +553,68 @@ class CoopClient:
             except (queue.Empty, queue.Full):
                 pass
 
+    def _consume(self, incoming: bytearray, data: bytes) -> bytearray:
+        incoming.extend(data)
+        while b'\n' in incoming:
+            line, _, rest = incoming.partition(b'\n')
+            incoming = bytearray(rest)
+            if len(line) > MAX_BUFFER:
+                raise ValueError('packet too large')
+            message = json.loads(line.decode('utf-8'))
+            if isinstance(message, dict) and isinstance(message.get('type'), str):
+                self._event(message)
+        if len(incoming) > MAX_BUFFER:
+            raise ValueError('packet too large')
+        return incoming
+
+    def _run_websocket(self) -> None:
+        try:
+            from websockets.exceptions import ConnectionClosed, WebSocketException
+            from websockets.sync.client import connect
+            from urllib.parse import urlsplit
+        except ImportError:
+            if not self._stop.is_set():
+                self._event({'type': 'disconnected', 'message': 'Компонент интернет-соединения отсутствует. Переустановите игру.'})
+            return
+        incoming = bytearray()
+        error = 'Интернет-соединение закрыто. Проверьте ссылку и доступ к Cloudflare.'
+        try:
+            # In the game UI only validated wss:// invitations are accepted;
+            # ws:// is also useful for exercising the gateway on loopback.
+            # Respect a configured HTTPS proxy for the public service, but never
+            # route local test and LAN connections through it.
+            hostname = urlsplit(self.websocket_url).hostname
+            proxy = None if hostname in ('localhost', '127.0.0.1', '::1') else True
+            with connect(self.websocket_url, open_timeout=15, close_timeout=1,
+                         max_size=MAX_BUFFER, compression=None, proxy=proxy) as ws:
+                self._websocket = ws
+                if self._stop.is_set():
+                    return
+                ws.send(self._initial)
+                while not self._stop.is_set():
+                    for _ in range(64):
+                        try:
+                            ws.send(self._send_queue.get_nowait())
+                        except queue.Empty:
+                            break
+                    try:
+                        data = ws.recv(timeout=.05)
+                    except TimeoutError:
+                        continue
+                    if not isinstance(data, bytes):
+                        raise ValueError('binary packet expected')
+                    incoming = self._consume(incoming, data)
+        except (OSError, ValueError, TypeError, ImportError, WebSocketException, ConnectionClosed):
+            pass
+        finally:
+            self._websocket = None
+            if not self._stop.is_set():
+                self._event({'type': 'disconnected', 'message': error})
+
     def _run(self) -> None:
+        if self.websocket_url:
+            self._run_websocket()
+            return
         import select
         sock = None
         incoming = bytearray()
@@ -577,17 +645,7 @@ class CoopClient:
                     if not data:
                         error = 'Соединение с хостом закрыто.'
                         break
-                    incoming.extend(data)
-                    while b'\n' in incoming:
-                        line, _, rest = incoming.partition(b'\n')
-                        incoming = bytearray(rest)
-                        if len(line) > MAX_BUFFER:
-                            raise ValueError('packet too large')
-                        message = json.loads(line.decode('utf-8'))
-                        if isinstance(message, dict) and isinstance(message.get('type'), str):
-                            self._event(message)
-                    if len(incoming) > MAX_BUFFER:
-                        raise ValueError('packet too large')
+                    incoming = self._consume(incoming, data)
         except (OSError, ValueError, UnicodeDecodeError, TypeError) as exc:
             error = f'Не удалось подключиться: {exc}'
         finally:

@@ -20,6 +20,7 @@ class Interface:
         self.order_widgets=[]
         self._overlay_widgets=[]
         self.lobby_entry=None
+        self.lobby_notice=None
         self._make_hud()
         self.hud.hide()
         self.notice_timer=0
@@ -47,11 +48,11 @@ class Interface:
                             borderWidth=(0,0))
         return self._track_overlay(parent, widget)
 
-    def entry(self, parent, text, x, z, width, command=None, size=.043):
+    def entry(self, parent, text, x, z, width, command=None, size=.043, overflow=False):
         # DirectEntry measures its width in character units before scaling.
         char_width=width/size
         widget=DirectEntry(parent=parent,entryFont=self.font,initialText=text,scale=size,
-                           pos=(x,0,z),width=char_width-.4,numLines=1,overflow=0,
+                           pos=(x,0,z),width=char_width-.4,numLines=1,overflow=int(overflow),
                            frameSize=(-.18,char_width,-.30,1.15),frameColor=(.055,.12,.11,1),
                            text_fg=CREAM,cursorKeys=1,focus=0,command=command,
                            rolloverSound=None,clickSound=None)
@@ -61,7 +62,7 @@ class Interface:
         for widget in reversed(self._overlay_widgets):
             widget.destroy()
         self._overlay_widgets=[]
-        self.lobby_entry=None
+        self.lobby_entry=None; self.lobby_notice=None
         for child in self.overlay.getChildren(): child.removeNode()
 
     def _make_hud(self):
@@ -249,62 +250,86 @@ class Interface:
         self.game.mode='coop_setup'
         self.show_hud(False); self.clear_overlay(); self._darken()
         self.label(self.overlay,'ИГРА С ДРУЗЬЯМИ',-1.40,.76,.085,CREAM,True)
-        self.label(self.overlay,'Комната на 1–8 игроков  /  локальная сеть или прямой IP',-1.40,.66,.033,MUTED)
+        self.label(self.overlay,'1–8 игроков  /  интернет по ссылке или локальная сеть',-1.40,.66,.033,MUTED)
         self.label(self.overlay,'ВАШЕ ИМЯ',-1.40,.53,.032,YELLOW,True)
-        self.label(self.overlay,'АДРЕС ХОСТА',-1.40,.34,.032,YELLOW,True)
-        self.label(self.overlay,'TCP-ПОРТ',-1.40,.15,.032,YELLOW,True)
-        self.label(self.overlay,'КОД КОМНАТЫ',-.65,.15,.032,YELLOW,True)
+        self.label(self.overlay,'ССЫЛКА ИЛИ АДРЕС ХОСТА',-1.40,.34,.032,YELLOW,True)
+        self.label(self.overlay,'TCP-ПОРТ  /  LAN',-1.40,.15,.032,YELLOW,True)
+        self.label(self.overlay,'КОД КОМНАТЫ  /  LAN',-.65,.15,.032,YELLOW,True)
         self.coop_entries={
             'name':self.entry(self.overlay,self.game.coop_name,-1.39,.45,1.55),
-            'address':self.entry(self.overlay,self.game.coop_address,-1.39,.26,1.55),
+            'address':self.entry(self.overlay,self.game.coop_address_display(),-1.39,.26,1.55,size=.037),
             'port':self.entry(self.overlay,str(self.game.coop_port),-1.39,.07,.60),
             'code':self.entry(self.overlay,self.game.coop_code,-.64,.07,.80),
         }
         self.frame(self.overlay,.42,.55,1.05,.58,(.10,.23,.20,.98))
-        self.label(self.overlay,'СОЗДАТЬ КОМНАТУ',.47,.46,.036,CREAM,True)
-        self.label(self.overlay,'Укажите имя и порт. Хост\nполучит шестизначный код.\nДля входа нужны IP и код.',.47,.38,.031,MUTED)
-        self.label(self.overlay,'Без сервера-посредника.\nИграть только с доверенными\nучастниками.',.47,.19,.028,MUTED)
-        self.button(self.overlay,'СОЗДАТЬ',-1.40,-.11,1.32,.13,self.game.host_coop,size=.044)
-        self.button(self.overlay,'ПОДКЛЮЧИТЬСЯ',.04,-.11,1.43,.13,self.game.join_coop,color=ORANGE,text_color=WHITE,size=.041)
-        self.button(self.overlay,'НАЗАД',-1.40,-.36,.82,.11,self.game.return_menu,color=(.20,.34,.30,1),text_color=CREAM,size=.039)
+        self.label(self.overlay,'ИНТЕРНЕТ ПО ССЫЛКЕ',.47,.46,.035,CREAM,True)
+        self.label(self.overlay,'Хост создаёт ссылку,\nгость вставляет её слева.\nПроброс порта не нужен.',.47,.38,.031,MUTED)
+        self.button(self.overlay,'ВСТАВИТЬ ССЫЛКУ',.47,.17,.94,.10,self.game.paste_invitation,
+                    color=(.20,.39,.34,1),text_color=CREAM,size=.031)
+        self.label(self.overlay,'Временный сервис Cloudflare\nможет быть недоступен.',.47,.01,.027,MUTED)
+        self.button(self.overlay,'СОЗДАТЬ ИНТЕРНЕТ',-1.40,-.17,1.00,.13,
+                    lambda:self.game.host_coop(internet=True),size=.033)
+        self.button(self.overlay,'СОЗДАТЬ LAN',-.34,-.17,.83,.13,self.game.host_coop,
+                    color=(.20,.39,.34,1),text_color=CREAM,size=.033)
+        self.button(self.overlay,'ВОЙТИ',.55,-.17,.92,.13,self.game.join_coop,color=ORANGE,text_color=WHITE,size=.039)
+        self.button(self.overlay,'НАЗАД',-1.40,-.40,.82,.11,self.game.return_menu,color=(.20,.34,.30,1),text_color=CREAM,size=.039)
         if message:
-            self.label(self.overlay,message,-1.40,-.57,.031,ORANGE,True)
-        self.label(self.overlay,'Все участники должны использовать одну и ту же версию игры.',-1.40,-.78,.030,MUTED)
+            self.label(self.overlay,message,-1.40,-.60,.031,ORANGE,True)
+        self.label(self.overlay,'Всем нужна одинаковая версия игры. Ссылку передавайте только друзьям.',-1.40,-.80,.029,MUTED)
 
     def coop_values(self):
         return {key:entry.get() for key,entry in self.coop_entries.items()}
 
-    def connecting(self):
+    def connecting(self, message='Ожидаем ответ хоста.'):
         self.show_hud(False); self.clear_overlay(); self._darken()
         self.label(self.overlay,'ПОДКЛЮЧЕНИЕ...',0,.31,.09,CREAM,True,TextNode.ACenter)
-        self.label(self.overlay,'Ожидаем ответ хоста.',0,.16,.038,MUTED,False,TextNode.ACenter)
+        self.label(self.overlay,message,0,.16,.035,MUTED,False,TextNode.ACenter)
         self.button(self.overlay,'ОТМЕНА',-.48,-.02,.96,.12,self.game.return_menu,color=YELLOW,size=.041)
 
     def lobby(self):
         self.show_hud(False); self.clear_overlay(); self._darken()
         self.label(self.overlay,'КОМНАТА',-1.40,.78,.085,CREAM,True)
-        if self.game.net_is_host:
+        internet=bool(self.game.net_invite or (self.game.net_client and self.game.net_client.websocket_url))
+        panel_top=.48
+        if self.game.net_invite:
+            self.label(self.overlay,'ИНТЕРНЕТ-КОМНАТА  /  ПРИГЛАШЕНИЕ',-1.40,.64,.035,YELLOW,True)
+            link=self.game.net_invite
+            self.label(self.overlay,link[:50]+'\n'+link[50:],-1.40,.58,.031,MUTED)
+            self.button(self.overlay,'КОПИРОВАТЬ',.51,.67,.96,.10,self.game.copy_invitation,
+                        color=(.20,.39,.34,1),text_color=CREAM,size=.031)
+            panel_top=.43
+        elif self.game.net_is_host:
             self.label(self.overlay,f'КОД: {self.game.net_server.code}     ПОРТ TCP: {self.game.net_server.port}',-1.40,.64,.043,YELLOW,True)
             self.label(self.overlay,'IP хоста: '+self.game.host_address_hint(),-1.40,.57,.031,MUTED)
+        elif internet:
+            self.label(self.overlay,'ПОДКЛЮЧЕНО ПО ИНТЕРНЕТ-ССЫЛКЕ',-1.40,.64,.039,YELLOW,True)
+            self.label(self.overlay,'Для начала смены дождитесь хоста.',-1.40,.57,.031,MUTED)
         else:
             self.label(self.overlay,f'ХОСТ: {self.game.coop_address}:{self.game.coop_port}',-1.40,.64,.039,YELLOW,True)
             self.label(self.overlay,'Для начала смены дождитесь хоста.',-1.40,.57,.031,MUTED)
-        self.frame(self.overlay,-1.40,.48,1.22,1.00,(.10,.23,.20,.98))
-        self.lobby_players=self.label(self.overlay,'',-1.34,.40,.039,CREAM,may_change=True)
-        self.label(self.overlay,'ЧАТ КОМАНДЫ',.02,.43,.037,YELLOW,True)
-        self.frame(self.overlay,0,.36,1.43,.59,(.10,.23,.20,.98))
-        self.lobby_chat=self.label(self.overlay,'',.04,.28,.031,CREAM,may_change=True)
+        self.frame(self.overlay,-1.40,panel_top,1.22,.94,(.10,.23,.20,.98))
+        self.lobby_players=self.label(self.overlay,'',-1.34,panel_top-.08,.039,CREAM,may_change=True)
+        self.label(self.overlay,'ЧАТ КОМАНДЫ',.02,panel_top-.05,.037,YELLOW,True)
+        self.frame(self.overlay,0,panel_top-.12,1.43,.54,(.10,.23,.20,.98))
+        self.lobby_chat=self.label(self.overlay,'',.04,panel_top-.20,.031,CREAM,may_change=True)
         self.lobby_entry=self.entry(self.overlay,'',.04,-.30,1.04,self.game.send_chat,size=.036)
         self.button(self.overlay,'OK',1.13,-.27,.28,.09,
                     lambda:self.game.send_chat(self.lobby_entry.get()),size=.030)
+        self.lobby_notice=self.label(self.overlay,'',-1.40,-.58,.027,YELLOW,may_change=True)
         if self.game.net_is_host:
             self.button(self.overlay,'НАЧАТЬ СМЕНУ',-1.40,-.66,1.35,.13,self.game.start_shift,size=.044)
         else:
             self.label(self.overlay,'Ожидаем начала смены...',-1.40,-.75,.036,MUTED)
         self.button(self.overlay,'ПОКИНУТЬ',.03,-.66,1.10,.13,self.game.return_menu,color=(.20,.34,.30,1),text_color=CREAM,size=.041)
-        self.label(self.overlay,'Текстовый чат передаётся без шифрования. Смену нельзя поставить на паузу для всех.',-1.40,-.91,.026,MUTED)
+        note=('Туннель Cloudflare временный; сервис видит трафик. Ссылку отправляйте только друзьям.' if internet else
+              'Прямое соединение и чат не шифруются. Играть только с доверенными людьми.')
+        self.label(self.overlay,note,-1.40,-.91,.026,MUTED)
         self.update_lobby(self.game.net_players)
         self.update_chat(self.game.net_chat)
+
+    def lobby_status(self, message):
+        if self.lobby_notice is not None:
+            self.lobby_notice['text']=message
 
     def update_lobby(self, players):
         lines=[f'{len(players)}/8 ИГРОКОВ', '']

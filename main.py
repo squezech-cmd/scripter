@@ -1,4 +1,4 @@
-"""Burger Shift: an independent native cooking game with optional LAN co-op."""
+"""Burger Shift: an independent native cooking game with optional co-op."""
 from __future__ import annotations
 import argparse
 import math
@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import socket
 import sys
+import time
 
 # A packaged Panda3D application places assets alongside the frozen executable.
 # The SFX launcher extracts both together to a temporary directory before launch.
@@ -20,7 +21,19 @@ parser=argparse.ArgumentParser(add_help=True)
 parser.add_argument('--offscreen',action='store_true',help='render with the CPU for automated checks')
 parser.add_argument('--screenshot',default='',help='save a title screen and exit (for tests)')
 parser.add_argument('--screenshot-game',default='',help='save a gameplay frame and exit (for tests)')
+# Headless regression mode lets CI exercise the actual bundled Windows networking
+# code on two separate machines, without creating a visible game window.
+parser.add_argument('--test-coop',choices=('host','guest'),help=argparse.SUPPRESS)
+parser.add_argument('--test-invitation',default='',help=argparse.SUPPRESS)
+parser.add_argument('--test-result',default='',help=argparse.SUPPRESS)
+parser.add_argument('--test-timeout',type=float,default=240,help=argparse.SUPPRESS)
 args,_=parser.parse_known_args()
+if args.test_coop:
+    if not args.test_invitation or not args.test_result:
+        parser.error('co-op diagnostics require invitation and result files')
+    from game.coop_smoke import run as run_coop_smoke
+    raise SystemExit(run_coop_smoke(args.test_coop,args.test_invitation,args.test_result,
+                                    max(10,min(600,args.test_timeout))))
 
 config='''
 window-title Burger Shift - Diner Edition
@@ -47,8 +60,12 @@ from panda3d.core import Vec3, WindowProperties, ClockObject
 from game.logic import Profile, Shift
 from game.net import CoopClient, CoopServer, DEFAULT_PORT, item_data, item_from_data, shift_from_data
 from game.stations import GRILL_KEYS, STATIONS
+from game.tunnel import QuickTunnel, WebSocketGateway, invitation, new_token, parse_invitation
+from game import clipboard
 from game.world import DinerWorld
 from game.ui import Interface
+
+INVITATION_MARKER='ССЫЛКА ВСТАВЛЕНА'
 
 
 def save_path():
@@ -73,7 +90,9 @@ class BurgerGame(ShowBase):
         self.world=DinerWorld(self,self.font_bold)
         self.shift=None; self.mode='menu'; self.target=None; self.heading=0; self.pitch=0
         self.coop_name='Повар'; self.coop_address=''; self.coop_port=DEFAULT_PORT; self.coop_code=''
+        self.pasted_invitation=''
         self.net_client=None; self.net_server=None; self.net_id=None; self.net_is_host=False
+        self.net_gateway=None; self.net_tunnel=None; self.net_invite=''; self.net_tunnel_token=''
         self.net_phase=''; self.net_epoch=-1; self.net_players=[]; self.net_chat=[]
         self.net_move_timer=0.; self.net_summary_signature=None; self.chat_open=False
         self.finalExitCallbacks.append(self._stop_network)
@@ -92,6 +111,7 @@ class BurgerGame(ShowBase):
         self.accept('e',self.interact); self.accept('mouse1',self.interact)
         self.accept('f',self.flip); self.accept('r',self.wrap); self.accept('q',self.drop)
         self.accept('t',self.open_chat); self.accept('escape',self.escape)
+        self.accept('control-v',self.paste_invitation)
         self.taskMgr.add(self.update,'update-game')
         self.ui.menu(); self._capture_mouse(False)
 
@@ -133,10 +153,17 @@ class BurgerGame(ShowBase):
         choices=sorted(x for x in addresses if not x.startswith(('127.','169.254.')) and x!='0.0.0.0')
         return ' / '.join(choices[:2]) or 'узнайте через ipconfig'
 
+    def coop_address_display(self):
+        return INVITATION_MARKER if self.pasted_invitation and self.coop_address==self.pasted_invitation else self.coop_address
+
     def _remember_coop_values(self):
         values=self.ui.coop_values()
         self.coop_name=''.join(c for c in values['name'] if c.isprintable()).strip()[:18] or 'Повар'
-        self.coop_address=values['address'].strip()[:253]
+        address=values['address'].strip()
+        if address==INVITATION_MARKER and self.pasted_invitation:
+            self.coop_address=self.pasted_invitation
+        else:
+            self.coop_address=address[:253]; self.pasted_invitation=''
         self.coop_code=values['code'].strip()[:12]
         try:
             port=int(values['port'].strip())
@@ -147,38 +174,103 @@ class BurgerGame(ShowBase):
             return False
         return True
 
-    def host_coop(self):
+    def host_coop(self, internet=False):
         if self.mode!='coop_setup' or not self._remember_coop_values(): return
         try:
-            self.net_server=CoopServer(self.profile,save_path(),port=self.coop_port)
+            # Internet rooms expose only the loopback WebSocket gateway, not
+            # the raw TCP game server. LAN remains available as a separate mode.
+            self.net_server=CoopServer(self.profile,save_path(),
+                                       host='127.0.0.1' if internet else '0.0.0.0',
+                                       port=0 if internet else self.coop_port)
+            self.coop_code=self.net_server.code; self.net_is_host=True
+            if internet:
+                self.net_tunnel_token=new_token()
+                self.net_gateway=WebSocketGateway(self.net_server.port,self.net_tunnel_token)
+                self.net_tunnel=QuickTunnel(self.net_gateway.port)
+                self.mode='tunnel_starting'
+                self.ui.connecting('Создаём временную интернет-ссылку. Это может занять до минуты.')
+                return
+            self.coop_port=self.net_server.port
+            self.net_client=CoopClient('127.0.0.1',self.coop_port,self.coop_name,
+                                       self.coop_code,self.net_server.host_token)
+            self.mode='connecting'; self.ui.connecting()
         except (OSError,ValueError) as exc:
-            self.ui.coop_setup('Не удалось открыть порт: '+str(exc)[:70])
-            return
-        self.coop_port=self.net_server.port; self.coop_code=self.net_server.code
-        self.net_is_host=True
-        self.net_client=CoopClient('127.0.0.1',self.coop_port,self.coop_name,self.coop_code,self.net_server.host_token)
-        self.mode='connecting'; self.ui.connecting()
+            self._stop_network()
+            self.ui.coop_setup('Не удалось создать комнату: '+str(exc)[:70])
 
     def join_coop(self):
         if self.mode!='coop_setup' or not self._remember_coop_values(): return
         if not self.coop_address:
-            self.ui.coop_setup('Введите IP-адрес или имя компьютера хоста.')
+            self.ui.coop_setup('Вставьте интернет-ссылку или введите адрес хоста.')
             return
-        if not (len(self.coop_code)==6 and self.coop_code.isascii() and self.coop_code.isdigit()):
-            self.ui.coop_setup('Код комнаты должен состоять из шести цифр.')
-            return
+        if self.coop_address.lower().startswith(('https://','wss://')) or '.trycloudflare.com' in self.coop_address.lower():
+            try:
+                endpoint,code=parse_invitation(self.coop_address)
+            except ValueError:
+                self.ui.coop_setup('Неверная ссылка. Попросите хоста скопировать приглашение целиком.')
+                return
+            self.coop_code=code
+            self.net_client=CoopClient('',0,self.coop_name,code,websocket_url=endpoint)
+        else:
+            if not (len(self.coop_code)==6 and self.coop_code.isascii() and self.coop_code.isdigit()):
+                self.ui.coop_setup('Для прямого подключения нужен шестизначный код комнаты.')
+                return
+            self.net_client=CoopClient(self.coop_address,self.coop_port,self.coop_name,self.coop_code)
         self.net_is_host=False
-        self.net_client=CoopClient(self.coop_address,self.coop_port,self.coop_name,self.coop_code)
         self.mode='connecting'; self.ui.connecting()
+
+    def paste_invitation(self):
+        if self.mode!='coop_setup': return
+        try:
+            text=clipboard.get_text().strip()
+            parse_invitation(text)
+        except (clipboard.ClipboardError,ValueError):
+            self.ui.coop_setup('В буфере нет правильной ссылки-приглашения.')
+            return
+        self.coop_address=text; self.pasted_invitation=text
+        # Panda3D's scrolling entry may render long URLs invisibly on the
+        # software renderer; retain the full validated URL separately.
+        self.ui.coop_entries['address'].enterText(INVITATION_MARKER)
+
+    def copy_invitation(self):
+        if not self.net_invite: return
+        try:
+            clipboard.set_text(self.net_invite)
+            self.ui.lobby_status('Ссылка скопирована. Отправьте её друзьям.')
+        except clipboard.ClipboardError:
+            self.ui.lobby_status('Не удалось скопировать. Перепишите ссылку выше целиком.')
+
+    def _poll_tunnel(self):
+        tunnel=self.net_tunnel
+        if not tunnel: return
+        for event in tunnel.poll():
+            if event.get('type')=='ready' and self.mode=='tunnel_starting' and self.net_server:
+                try:
+                    self.net_invite=invitation(event['url'],self.net_tunnel_token,self.net_server.code)
+                except (KeyError,ValueError):
+                    self._network_failure('Сервис вернул некорректную интернет-ссылку.')
+                    return
+                self.net_client=CoopClient('127.0.0.1',self.net_server.port,self.coop_name,
+                                           self.coop_code,self.net_server.host_token)
+                self.mode='connecting'; self.ui.connecting('Ссылка готова. Входим в комнату...')
+            elif event.get('type') in ('error','closed'):
+                self._network_failure('Интернет-туннель недоступен. Проверьте сеть или используйте LAN/VPN.')
+                return
+        if self.mode=='tunnel_starting' and time.monotonic()-tunnel.started>tunnel.START_TIMEOUT:
+            self._network_failure('Не удалось создать интернет-ссылку. Проверьте доступ к Cloudflare.')
 
     def _stop_network(self):
         client,server=self.net_client,self.net_server
-        self.net_client=None; self.net_server=None
+        tunnel,gateway=self.net_tunnel,self.net_gateway
+        self.net_client=None; self.net_server=None; self.net_tunnel=None; self.net_gateway=None
         if client: client.close()
+        if tunnel: tunnel.stop()
+        if gateway: gateway.stop()
         if server:
             server.stop()
             # Host's authoritative profile is separate from the render snapshot.
             self.profile=Profile(**vars(server.profile))
+        self.net_invite=''; self.net_tunnel_token=''
         self.net_id=None; self.net_is_host=False; self.net_phase=''; self.net_epoch=-1
         self.net_players=[]; self.net_chat=[]; self.net_summary_signature=None
         self.chat_open=False
@@ -334,7 +426,7 @@ class BurgerGame(ShowBase):
         elif self.mode=='playing':
             self.mode='pause'; self._capture_mouse(False); self.ui.show_hud(False); self.ui.pause()
         elif self.mode=='pause': self.resume()
-        elif self.mode in ('summary','lobby','connecting','coop_setup'): self.return_menu()
+        elif self.mode in ('summary','lobby','connecting','tunnel_starting','coop_setup'): self.return_menu()
         else: self.ui.menu()
 
     def buy_upgrade(self,key):
@@ -423,6 +515,7 @@ class BurgerGame(ShowBase):
     def update(self,task):
         dt=max(0.0,min(globalClock.getDt(),.12))
         self.elapsed+=dt
+        self._poll_tunnel()
         self._poll_network()
         if self.mode=='playing' and self.shift:
             if not self.chat_open: self._move(dt)

@@ -9,9 +9,9 @@ from .geometry import box, cylinder, sphere
 from .logic import TOPPING_NAMES
 from .stations import GRILL_KEYS, STATIONS, STATION_BY_KEY
 
-CREAM=(.97,.92,.80,1); DEEP=(.09,.24,.22,1); GREEN=(.15,.38,.32,1)
-RED=(.80,.25,.16,1); YELLOW=(.98,.67,.23,1); STEEL=(.80,.83,.80,1)
-DARK=(.15,.19,.18,1); WHITE=(.96,.95,.89,1); WOOD=(.62,.39,.22,1)
+CREAM=(.98,.95,.87,1); DEEP=(.12,.14,.13,1); GREEN=(.25,.39,.26,1)
+RED=(.72,.09,.055,1); YELLOW=(.98,.69,.17,1); STEEL=(.82,.84,.82,1)
+DARK=(.16,.17,.16,1); WHITE=(.98,.97,.94,1); WOOD=(.62,.39,.22,1)
 
 
 class DinerWorld:
@@ -20,7 +20,10 @@ class DinerWorld:
         self.root=base.render.attachNewNode('restaurant')
         self.textures={}
         for name in ['floor_terracotta','checker','plaster','wall_tiles','steel','wood','patty','bun','menu','sign','sky','asphalt',
-                     'steel_detail','wood_detail','stone_detail','window_view']:
+                     'steel_detail','wood_detail','stone_detail','window_view','kitchen_tiles_real',
+                     'floor_tiles_real','diner_wall_real','menu_board_real',
+                     'bun_real','patty_real','lettuce_real','tomato_real','pickle_real',
+                     'bun_side','patty_side']:
             tex=base.loader.loadTexture('assets/textures/'+name+'.png')
             tex.setWrapU(Texture.WM_repeat); tex.setWrapV(Texture.WM_repeat)
             tex.setMinfilter(Texture.FTLinearMipmapLinear); tex.setMagfilter(Texture.FTLinear)
@@ -44,9 +47,9 @@ class DinerWorld:
         self._make_customers()
 
     def _make_lighting(self):
-        ambient=AmbientLight('warm ambient'); ambient.setColor(Vec4(.66,.65,.57,1))
+        ambient=AmbientLight('warm ambient'); ambient.setColor(Vec4(.61,.59,.56,1))
         self.root.setLight(self.root.attachNewNode(ambient))
-        sun=DirectionalLight('sun'); sun.setColor(Vec4(.68,.68,.58,1))
+        sun=DirectionalLight('sun'); sun.setColor(Vec4(.58,.55,.49,1))
         n=self.root.attachNewNode(sun); n.setHpr(-35,-55,0); self.root.setLight(n)
         self.base.setBackgroundColor(.64,.77,.80,1)
 
@@ -55,6 +58,13 @@ class DinerWorld:
 
     def c(self,pos,size,color=WHITE,tex=None,parent=None):
         return cylinder(parent or self.root,pos,size,color,self.textures.get(tex) if tex else None)
+
+    def slice(self,pos,size,side_color,texture,parent=None,top_color=WHITE,side_texture=None):
+        # A circular food photograph belongs on the cut face, not wrapped
+        # around the rim as a horizontal stripe. Give the sides their own material.
+        self.c(pos,size,side_color,side_texture,parent=parent)
+        top=(pos[0],pos[1],pos[2]+size[2]*.5+.001)
+        self.c(top,(size[0],size[1],.002),top_color,texture,parent=parent)
 
     def text(self,text,pos,scale=.16,color=CREAM,parent=None,heading=0):
         t=TextNode('label'); t.setFont(self.font); t.setText(text); t.setAlign(TextNode.ACenter)
@@ -66,17 +76,16 @@ class DinerWorld:
         self.obstacles.append((min(x1,x2),max(x1,x2),min(y1,y2),max(y1,y2)))
 
     def _make_room(self):
-        # Floors: 3D texture coordinates are repeated rather than stretched.
-        self.b((0,0,-.12),(18,18,.22),WHITE,'floor_terracotta',(5,5))
+        # Warm terracotta behind the counter, real wood in the customer area.
+        self.b((0,0,-.12),(18,18,.22),WHITE,'floor_tiles_real',(3,6))
         self.b((0,3.8,.006),(17.8,10.3,.025),WHITE,'wood_detail',(4,3))
-        self.b((0,0,4.35),(18.2,18.2,.22),(.94,.91,.82,1),'plaster',(4,4))
-        # Rear and side walls, with a tiled waist-high band.
-        self.b((0,-9,2.15),(18.2,.22,4.3),WHITE,'plaster',(5,1.5))
-        self.b((0,-8.86,1.1),(18,.06,2.15),WHITE,'wall_tiles',(6,1.1))
-        self.b((-9,0,2.15),(.22,18,4.3),WHITE,'plaster',(5,1.5))
-        self.b((-8.86,0,1.02),(.06,18,2.05),WHITE,'wall_tiles',(5,1))
-        self.b((9,-4.5,2.15),(.22,9,4.3),WHITE,'plaster',(3,1))
-        self.b((8.86,-4.5,1.05),(.06,9,2.1),WHITE,'wall_tiles',(3,1))
+        self.b((0,0,4.35),(18.2,18.2,.22),(.96,.94,.88,1),'plaster',(4,4))
+        # Kitchen is clad in small white ceramic tile; the dining side has
+        # darker subway tile, warm wood and red/orange details.
+        self.b((0,-9,2.15),(18.2,.22,4.3),WHITE,'kitchen_tiles_real',(4,1))
+        self.b((-9,0,2.15),(.22,18,4.3),WHITE,'kitchen_tiles_real',(4,1))
+        self.b((-8.86,4.5,2.15),(.06,8.9,4.2),WHITE,'diner_wall_real',(2,1.5))
+        self.b((9,-4.5,2.15),(.22,9,4.3),WHITE,'kitchen_tiles_real',(2,1))
         # Picture windows on the dining side: wall piers + transparent glazing.
         self.b((9,4.5,.44),(.23,9,.88),RED)
         self.b((9,4.5,3.90),(.23,9,.8),CREAM)
@@ -97,32 +106,38 @@ class DinerWorld:
         self.b((0,13,-.21),(42,12,.12),(.69,.75,.67,1),'asphalt',(5,2))
         for x in range(-8,9,3):
             self.b((x,7.9,.015),(1.4,.4,.025),(1,.78,.30,1))
-        # Ceiling ribs and industrial hanging lights.
-        for x in range(-8,9,4):
-            self.b((x,0,4.19),(.07,18,.06),(.80,.78,.70,1))
-        for y in range(-8,9,4):
-            self.b((0,y,4.19),(18,.07,.06),(.80,.78,.70,1))
-        for x in (-5,0,5):
-            for y in (-5,4):
-                self.c((x,y,3.87),(.035,.035,.55),DARK)
-                self.c((x,y,3.57),(.65,.65,.15),DEEP)
-                self.c((x,y,3.48),(.49,.49,.035),(1,.87,.58,1))
-        # Menu and house branding: a designed 2D texture on actual 3D panels.
-        self.b((.1,-1.00,3.36),(8.8,.18,1.28),DEEP)
-        panel=self.b((.1,-1.105,3.36),(8.4,.025,1.08),WHITE,'menu')
-        panel.setLightOff(1)
+        # Suspended acoustic ceiling with recessed illuminated panels.
+        for x in range(-8,9,2):
+            self.b((x,0,4.19),(.025,18,.025),(.75,.73,.67,1))
+        for y in range(-8,9,2):
+            self.b((0,y,4.19),(18,.025,.025),(.75,.73,.67,1))
+        for x in (-6,-2,2,6):
+            for y in (-6,-2,4,8):
+                self.b((x,y,4.17),(1.25,.74,.035),(.72,.72,.68,1))
+                panel=self.b((x,y,4.145),(1.13,.62,.018),(1,.97,.86,1))
+                panel.setLightOff(1)
+        # Three individually framed menu screens across the counter, similar
+        # to an actual fast-food ordering line rather than a single dark slab.
+        for x in (-3.12,.1,3.32):
+            self.b((x,-1.00,3.36),(3.12,.16,1.34),(.10,.10,.10,1))
+            panel=self.b((x,-1.095,3.36),(3.02,.025,1.24),WHITE,'menu_board_real')
+            panel.setLightOff(1)
         self.b((-6.75,-8.84,3.36),(3.5,.08,1.03),WHITE,'sign')
         self.b((6.3,-8.83,3.02),(2.1,.07,2.6),WHITE,parent=self.root).setTexture(self.poster,1)
-        # Accents along the kitchen and dining zones.
-        self.b((0,-8.73,2.23),(18,.03,.13),RED)
-        self.b((-8.73,0,2.15),(.03,18,.13),RED)
+        # Warm trim, colour-blocked columns and a low wooden baseboard.
+        self.b((0,-8.84,3.72),(18,.035,.10),YELLOW)
+        self.b((-8.84,-4.5,3.72),(.035,8.9,.10),YELLOW)
+        self.b((-8.78,4.5,.32),(.08,8.8,.64),(.43,.24,.12,1),'wood_detail',(2,1))
+        for y in (.15,4.45,8.7):
+            self.b((-8.78,y,2.15),(.09,.22,4.15),(.79,.31,.09,1))
+        self.b((0,-8.73,2.23),(18,.03,.07),(.79,.64,.34,1))
 
     def _station_label(self,label,x,y,z=.78,heading=0):
         # Inset the label into the counter front, not in front of the food.
         # Back-counter labels face toward +Y; front-counter labels face -Y.
-        self.b((x,y,z),(.78,.035,.22),DEEP)
-        offset=.024 if heading == 180 else -.024
-        self.text(label,(x,y+offset,z-.047),.085,CREAM,heading=heading)
+        self.b((x,y,z),(.54,.025,.12),(.34,.36,.34,1))
+        offset=.018 if heading == 180 else -.018
+        self.text(label,(x,y+offset,z-.026),.052,CREAM,heading=heading)
 
     def _make_kitchen(self):
         # Main counter, stainless tabletop, framed inset panels.
@@ -183,6 +198,16 @@ class DinerWorld:
         self.c((-5.49,-1.0,1.19),(.22,.22,.13),(.82,.68,.40,1))
         self.c((-5.49,-1.0,1.27),(.08,.08,.05),(.31,.28,.22,1))
         self._station_label('ВЫДАЧА',-4.75,-1.505,.78)
+        # Point-of-sale terminal with a small lit screen and card reader.
+        self.b((-5.25,-.32,1.15),(.47,.34,.08),(.16,.17,.16,1))
+        self.b((-5.25,-.32,1.34),(.11,.12,.35),(.22,.23,.22,1))
+        self.b((-5.25,-.32,1.56),(.63,.11,.43),(.13,.14,.14,1))
+        display=self.b((-5.25,-.385,1.56),(.54,.018,.33),(.10,.29,.30,1))
+        display.setLightOff(1)
+        for line in range(3):
+            self.b((-5.25,-.397,1.64-line*.08),(.38,.01,.02),(.70,.86,.75,1))
+        self.b((-4.73,-.29,1.18),(.22,.30,.12),(.20,.21,.20,1))
+        self.b((-4.73,-.27,1.25),(.12,.14,.012),(.46,.63,.55,1))
         # Wooden assembly board with a knife.
         self.b((-2.8,-.84,1.10),(1.50,.80,.08),WHITE,'wood')
         self.b((-2.1,-.88,1.17),(.09,.56,.035),(.78,.79,.75,1)).setH(-35)
@@ -196,9 +221,15 @@ class DinerWorld:
             if name=='СЫР':
                 for i in range(3): self.b((x,-.88+i*.11,1.23),(.50,.21,.018),(1,.78,.24,1))
             elif name=='САЛАТ':
-                for i in range(5): sphere(self.root,(x+(i%3-1)*.18,-.84+(i//3)*.17,1.22),(.29,.27,.09),(.39+.05*(i%2),.70,.24,1))
+                for i in range(5):
+                    leaf=sphere(self.root,(x+(i%3-1)*.18,-.84+(i//3)*.17,1.22),
+                                (.29,.27,.09),(.91,1,.86,1),self.textures['lettuce_real'])
+                    leaf.setH(i*35)
             else:
-                for i in range(4): self.c((x+(i%2-.5)*.22,-.88+(i//2)*.18,1.24),(.24,.24,.035),col)
+                texture='tomato_real' if name=='ТОМАТ' else 'pickle_real'
+                for i in range(4):
+                    self.slice((x+(i%2-.5)*.22,-.88+(i//2)*.18,1.24),
+                               (.24,.24,.035),col,texture)
             self._station_label(name,x,-1.505,.78)
         # Soda fountain, visible colored buttons and cup stack.
         self.b((4.85,-.81,1.48),(1.46,.84,.90),(.17,.29,.27,1))
@@ -233,23 +264,51 @@ class DinerWorld:
         self.c((6.9,-8.58,2.82),(.73,.73,.04),(.96,.96,.87,1)).setP(90)
         self.b((6.9,-8.54,2.91),(.025,.02,.21),DARK)
         self.b((7.0,-8.54,2.82),(.21,.02,.025),DARK)
+        # Order monitors and stainless shelf props give the rear prep line the
+        # visual density of a working restaurant without blocking player routes.
+        for x in (-5.55,.15,5.55):
+            self.b((x,-8.09,1.19),(.36,.30,.06),(.20,.21,.20,1))
+            self.b((x,-8.09,1.38),(.07,.08,.35),(.25,.27,.26,1))
+            self.b((x,-8.08,1.64),(.70,.11,.46),(.12,.13,.13,1))
+            screen=self.b((x,-8.008,1.64),(.60,.018,.36),(.10,.18,.17,1))
+            screen.setLightOff(1)
+            for i in range(3):
+                self.b((x,-7.993,1.73-i*.09),(.47,.012,.025),(.62,.75,.62,1))
+        self.b((-.1,-8.06,1.14),(1.28,.68,.12),(.46,.49,.48,1),'steel_detail')
+        self.b((-.1,-8.02,1.22),(.98,.52,.04),(.25,.28,.27,1))
+        for i in range(3):
+            self.b((-.45+i*.34,-8.03,1.25),(.26,.44,.035),(.72,.73,.70,1))
+        # Stacks of takeaway packaging and napkins.
+        for i in range(4):
+            self.b((1.25,-8.03,1.20+i*.10),(.45,.38,.08),(.78,.66,.49,1))
 
     def _make_dining(self):
-        # Booths and dining tables, all with real 3D volume.
-        for x in (-5.8,2.5):
-            for y in (3.4,6.9):
-                self.b((x,y,.66),(2.15,1.20,.12),WHITE,'stone_detail')
+        # Booths with segmented upholstered backs, wooden edging, table
+        # numbers and service trays, laid out around the existing walkways.
+        for column,x in enumerate((-5.8,2.5)):
+            for row,y in enumerate((3.4,6.9)):
+                self.b((x,y,.59),(2.18,1.23,.09),(.38,.23,.14,1),'wood_detail')
+                self.b((x,y,.66),(2.15,1.20,.10),WHITE,'stone_detail')
                 self.c((x,y,.34),(.16,.16,.64),(.37,.40,.37,1))
                 self.c((x,y,.06),(.78,.78,.08),(.28,.31,.29,1))
                 self.obstacle(x-1.10,x+1.10,y-.62,y+.62)
-                self.b((x,y,.75),(.27,.22,.14),CREAM)
-                self.c((x+.45,y+.14,.84),(.14,.14,.32),RED)
-                self.c((x+.67,y+.14,.84),(.14,.14,.32),YELLOW)
+                self.b((x,y,.74),(.30,.23,.13),(.72,.69,.61,1))
+                self.b((x,y,.815),(.23,.15,.026),(.98,.97,.91,1))
+                self.c((x+.45,y+.14,.84),(.14,.14,.32),(.76,.11,.06,1))
+                self.c((x+.67,y+.14,.84),(.14,.14,.32),(.94,.67,.12,1))
+                for dx,col in ((.45,(.90,.82,.70,1)),(.67,(.83,.75,.60,1))):
+                    self.c((x+dx,y+.14,1.015),(.055,.055,.06),col)
+                self.b((x-.60,y-.23,.75),(.68,.38,.04),(.18,.16,.14,1))
+                self.b((x+.68,y-.25,.84),(.20,.08,.27),(.93,.91,.84,1))
+                self.text(str(1+row*2+column),(x+.68,y-.30,.79),.11,DARK)
                 for side in (-1,1):
                     bx=x+side*1.56
-                    self.b((bx,y,.45),(.66,1.25,.25),RED)
-                    self.b((bx+side*.27,y,.95),(.13,1.30,1.12),RED)
-                    self.b((bx,y,.18),(.55,1.10,.24),DEEP)
+                    self.b((bx,y,.20),(.65,1.30,.28),(.36,.20,.13,1),'wood_detail')
+                    self.b((bx,y,.45),(.68,1.30,.23),(.30,.19,.14,1))
+                    self.b((bx+side*.27,y,.96),(.18,1.30,1.12),(.38,.20,.13,1),'wood_detail')
+                    for dy in (-.43,0,.43):
+                        self.b((bx+side*.16,y+dy,.98),(.12,.405,.94),(.60,.27,.16,1))
+                    self.b((bx+side*.27,y,1.55),(.21,1.35,.09),(.39,.22,.13,1),'wood_detail')
                     self.obstacle(bx-.35,bx+.35,y-.65,y+.65)
         # Wall poster: textured object with a contrasting wood border.
         self.b((-8.80,3.0,2.5),(.10,2.05,2.8),DEEP)
@@ -348,30 +407,34 @@ class DinerWorld:
     def _food(self,parent,kind,pos=(0,0,0),scale=1,toppings=frozenset()):
         root=parent.attachNewNode('food-'+kind); root.setPos(*pos); root.setScale(scale)
         if kind in ('raw_patty','cooked_patty','burnt_patty'):
-            color={'raw_patty':(.78,.36,.30,1),'cooked_patty':(.63,.38,.20,1),'burnt_patty':(.20,.16,.13,1)}[kind]
-            self.c((0,0,.06),(.54,.54,.12),color,'patty',parent=root)
-            if kind == 'cooked_patty':
-                for x in (-.16, -.08, 0, .08, .16):
-                    stripe=self.b((x,0,.123),(.018,.36,.004),(.22,.13,.08,1),parent=root)
-                    stripe.setH(-20)
+            if kind=='raw_patty':
+                self.c((0,0,.06),(.54,.54,.12),(.78,.36,.30,1),'patty',parent=root)
+            else:
+                side=WHITE if kind=='cooked_patty' else (.30,.27,.24,1)
+                tint=WHITE if kind=='cooked_patty' else (.38,.35,.32,1)
+                self.slice((0,0,.06),(.54,.54,.12),side,'patty_real',root,tint,'patty_side')
         elif kind in TOPPING_NAMES:
             if kind=='cheese': self.b((0,0,.03),(.53,.53,.055),YELLOW,parent=root)
             elif kind=='lettuce':
                 for i in range(7):
-                    a=i*math.tau/7; sphere(root,(math.cos(a)*.18,math.sin(a)*.18,.04),(.30,.25,.07),(.36,.70,.23,1))
+                    a=i*math.tau/7
+                    leaf=sphere(root,(math.cos(a)*.18,math.sin(a)*.18,.04),
+                                (.30,.25,.07),(.90,1,.84,1),self.textures['lettuce_real'])
+                    leaf.setH(i*51)
             else:
-                col=(.86,.22,.16,1) if kind=='tomato' else (.34,.58,.24,1)
-                self.c((0,0,.035),(.5,.5,.07),col,parent=root)
+                texture='tomato_real' if kind=='tomato' else 'pickle_real'
+                side=(.76,.16,.12,1) if kind=='tomato' else (.34,.53,.19,1)
+                self.slice((0,0,.035),(.5,.5,.07),side,texture,parent=root)
         elif kind=='bun':
-            self.c((0,0,.08),(.60,.60,.16),(.94,.68,.34,1),'bun',parent=root)
+            self.slice((0,0,.08),(.60,.60,.16),WHITE,'bun_real',root,side_texture='bun_side')
         elif kind=='burger':
-            self.c((0,0,.08),(.63,.63,.16),(.88,.61,.31,1),'bun',parent=root)
-            self.c((0,0,.19),(.60,.60,.12),(.59,.35,.19,1),'patty',parent=root)
+            self.slice((0,0,.08),(.63,.63,.16),WHITE,'bun_real',root,side_texture='bun_side')
+            self.slice((0,0,.19),(.60,.60,.12),WHITE,'patty_real',root,side_texture='patty_side')
             z=.27
             for topping in ('cheese','lettuce','tomato','pickle'):
                 if topping in toppings:
                     self._food(root,topping,(0,0,z),1); z+=.065
-            sphere(root,(0,0,z+.08),(.66,.66,.31),(.91,.63,.27,1),self.textures['bun'])
+            sphere(root,(0,0,z+.08),(.66,.66,.31),(1,.96,.88,1),self.textures['bun_real'])
             for i in range(9):
                 a=i*2.4; r=.09+(i%3)*.07
                 seed=sphere(root,(math.cos(a)*r,math.sin(a)*r,z+.205),(.055,.025,.015),(1,.91,.68,1))

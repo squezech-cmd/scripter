@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT))
 
 from game.logic import Profile
 from game.net import CoopClient, CoopServer
+import main as main_module
 from main import BurgerGame, save_path
 
 
@@ -150,6 +151,67 @@ def run():
         game.return_menu()
         assert other_server.alive and vars(game.profile) == own_profile
         assert vars(Profile.load(save_path())) == own_profile
+
+        # Create an internet room without the external service during the test;
+        # the guest still uses a real WebSocket gateway and TCP authority.
+        class FakeTunnel:
+            START_TIMEOUT = 60
+            def __init__(self, port):
+                self.started = time.monotonic()
+                self.events = [{'type': 'ready', 'url': 'https://fresh-room.trycloudflare.com'}]
+                self.stopped = False
+            def poll(self):
+                events, self.events = self.events, []
+                return events
+            def stop(self): self.stopped = True
+
+        real_tunnel, real_copy, real_paste = main_module.QuickTunnel, main_module.clipboard.set_text, main_module.clipboard.get_text
+        real_client = main_module.CoopClient
+        try:
+            main_module.QuickTunnel = FakeTunnel
+            game.ui.coop_setup()
+            game.host_coop(internet=True)
+            pump(game, lambda: game.mode == 'lobby')
+            assert game.net_invite.startswith('https://fresh-room.trycloudflare.com/burger/')
+            copied = []
+            main_module.clipboard.set_text = copied.append
+            game.copy_invitation()
+            assert copied == [game.net_invite]
+            link = game.net_invite
+            guest = CoopClient('', 0, 'Друг', game.net_server.code,
+                               websocket_url=f'ws://127.0.0.1:{game.net_gateway.port}/burger/{game.net_tunnel_token}')
+            wait_client(guest, lambda e: e.get('type') == 'welcome', game)
+            pump(game, lambda: len(game.net_players) == 2)
+            screen(game, 'internet-lobby.png')
+            game.start_shift()
+            pump(game, lambda: game.mode == 'playing')
+            wait_client(guest, lambda e: e.get('type') == 'snapshot' and e['phase'] == 'playing', game)
+            game.return_menu()
+            wait_client(guest, lambda e: e.get('type') == 'disconnected')
+            guest.close(); guest = None
+
+            # The complete, long invitation survives clipboard insertion and
+            # goes to the WSS transport rather than being treated as an IP.
+            game.ui.coop_setup()
+            main_module.clipboard.get_text = lambda: link
+            game.paste_invitation()
+            assert game.ui.coop_entries['address'].get() == main_module.INVITATION_MARKER
+            assert game.pasted_invitation == link
+            screen(game, 'internet-setup.png')
+            calls = []
+            class FakeClient:
+                def __init__(self, *args, **kwargs): calls.append((args, kwargs))
+                def close(self): pass
+            main_module.CoopClient = FakeClient
+            game.join_coop()
+            assert game.mode == 'connecting' and len(calls) == 1
+            assert calls[0][1]['websocket_url'].startswith('wss://fresh-room.trycloudflare.com/burger/')
+            assert calls[0][0][3] == link[-6:]
+            game.return_menu()
+        finally:
+            main_module.QuickTunnel = real_tunnel
+            main_module.clipboard.set_text, main_module.clipboard.get_text = real_copy, real_paste
+            main_module.CoopClient = real_client
         print('COOP UI INTEGRATION OK')
     finally:
         for client in (guest, owner):

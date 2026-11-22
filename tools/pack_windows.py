@@ -1,7 +1,7 @@
 """Wrap Panda3D's Windows build in one self-extracting, auto-starting EXE.
 
-Downloads pinned public-domain 7-Zip SDK SFX and pinned 7za compressor when
-needed. The game uses direct TCP connections only when the player selects co-op.
+Downloads pinned public-domain 7-Zip tools and a hash-verified Cloudflare
+connector. The connector is only launched if the player selects internet co-op.
 """
 from __future__ import annotations
 import argparse
@@ -22,6 +22,10 @@ SFX_URL = 'https://api.github.com/repos/sammtcbn/sfx_builder/contents/7zSD.sfx?r
 SFX_SHA256 = 'e228a2be6f84651b86e60d8d9b674a41315301d8e3dde9e22d3481cb4eb6fe3f'
 SEVEN_URL = 'https://registry.npmjs.org/7zip-bin/-/7zip-bin-5.2.0.tgz'
 SEVEN_SHA256 = '04f9738ee00be8be53f5d06254a9e6e4b5117b17f8b74058477d870e62764a7d'
+CLOUDFLARED_URL = 'https://registry.npmjs.org/@botharness/cloudflared-win32-x64/-/cloudflared-win32-x64-1.7.0.tgz'
+CLOUDFLARED_ARCHIVE_SHA256 = 'c06ba96daae04319a1b685a9b8ee2d9265e6210d8830b0c39a0a2a1b56e1b288'
+# The executable hash is also published by the official Cloudflare 2026.10.6 release.
+CLOUDFLARED_SHA256 = 'd521b3bf68982165f0d06d76732f22d9a105ef057ff3ae4c0986f3a23190950f'
 
 
 def download(url: str) -> bytes:
@@ -43,6 +47,7 @@ def main():
     parser.add_argument('--output', type=Path, default=ROOT/'BurgerShift.exe')
     parser.add_argument('--sevenzip', type=Path, help='use a locally installed 7z/7za executable')
     parser.add_argument('--sfx', type=Path, help='use a locally downloaded matching 7zSD.sfx')
+    parser.add_argument('--cloudflared', type=Path, help='use a local, hash-matching Cloudflare connector')
     args=parser.parse_args()
     source=args.source.resolve(); output=args.output.resolve()
     if not (source/'BurgerShiftGame.exe').is_file():
@@ -70,8 +75,18 @@ def main():
                 binary=temp/Path(member).name
                 binary.write_bytes(f.read()); binary.chmod(0o755)
                 seven=str(binary)
+        if args.cloudflared:
+            connector = checked(args.cloudflared.read_bytes(), CLOUDFLARED_SHA256, 'cloudflared')
+        else:
+            archive = checked(download(CLOUDFLARED_URL), CLOUDFLARED_ARCHIVE_SHA256, 'cloudflared archive')
+            with tarfile.open(fileobj=io.BytesIO(archive), mode='r:gz') as tar:
+                member = tar.extractfile('package/bin/cloudflared.exe')
+                if member is None: raise RuntimeError('cloudflared executable missing from archive')
+                connector = checked(member.read(), CLOUDFLARED_SHA256, 'cloudflared')
+        (temp/'cloudflared.exe').write_bytes(connector)
         package=temp/'payload.7z'
         subprocess.run([seven,'a','-t7z','-mx=7','-mmt=2',str(package),'*'],cwd=source,check=True)
+        subprocess.run([seven,'a','-t7z','-mx=7','-mmt=2',str(package),'cloudflared.exe'],cwd=temp,check=True)
         config=(
             ';!@Install@!UTF-8!\n'
             'Title="Burger Shift: Diner Edition"\n'
