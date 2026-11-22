@@ -1,41 +1,17 @@
-"""Restaurant, kitchen props and original low-poly characters."""
+"""Restaurant, kitchen props and animated co-op characters."""
 from __future__ import annotations
-from dataclasses import dataclass
 import math
+from pathlib import Path
 import random
-from panda3d.core import AmbientLight, DirectionalLight, NodePath, TextNode, Texture, Vec4
+from direct.actor.Actor import Actor
+from panda3d.core import AmbientLight, DirectionalLight, Filename, MaterialAttrib, NodePath, TextNode, Texture, TextureAttrib, Vec4
 from .geometry import box, cylinder, sphere
 from .logic import TOPPING_NAMES
+from .stations import GRILL_KEYS, STATIONS, STATION_BY_KEY
 
 CREAM=(.97,.92,.80,1); DEEP=(.09,.24,.22,1); GREEN=(.15,.38,.32,1)
 RED=(.80,.25,.16,1); YELLOW=(.98,.67,.23,1); STEEL=(.80,.83,.80,1)
 DARK=(.15,.19,.18,1); WHITE=(.96,.95,.89,1); WOOD=(.62,.39,.22,1)
-
-
-@dataclass(frozen=True)
-class Station:
-    key: str
-    label: str
-    x: float
-    y: float
-    z: float = 1.1
-
-
-STATIONS = [
-    Station('service','ВЫДАЧА',-4.75,-1.48),
-    Station('board','СБОРКА',-2.80,-1.48),
-    Station('cheese','СЫР',-.94,-1.48),
-    Station('lettuce','САЛАТ',.20,-1.48),
-    Station('tomato','ТОМАТ',1.34,-1.48),
-    Station('pickle','ОГУРЕЦ',2.48,-1.48),
-    Station('soda','НАПИТКИ',4.85,-1.48),
-    # Aim at the door, not the edge of the walkable area.  The latter could
-    # end up behind the camera when the player is pressed against the fridge.
-    Station('fridge','ХОЛОДИЛЬНИК',-7.40,-5.28),
-    Station('grill','ГРИЛЬ',-3.25,-7.35),
-    Station('fryer','ФРИТЮР',3.35,-7.35),
-    Station('bin','КОРЗИНА',7.40,-6.95),
-]
 
 
 class DinerWorld:
@@ -43,17 +19,24 @@ class DinerWorld:
         self.base=base; self.font=font
         self.root=base.render.attachNewNode('restaurant')
         self.textures={}
-        for name in ['floor_terracotta','checker','plaster','wall_tiles','steel','wood','patty','bun','menu','sign','sky','asphalt']:
+        for name in ['floor_terracotta','checker','plaster','wall_tiles','steel','wood','patty','bun','menu','sign','sky','asphalt',
+                     'steel_detail','wood_detail','stone_detail','window_view']:
             tex=base.loader.loadTexture('assets/textures/'+name+'.png')
             tex.setWrapU(Texture.WM_repeat); tex.setWrapV(Texture.WM_repeat)
             tex.setMinfilter(Texture.FTLinearMipmapLinear); tex.setMagfilter(Texture.FTLinear)
             tex.setAnisotropicDegree(4)
             self.textures[name]=tex
         self.poster=base.loader.loadTexture('assets/art/diner_poster.png')
+        self.uniforms=[base.loader.loadTexture('assets/models/textures/uniform_'+name+'.png')
+                       for name in ('orange','teal','red','blue','green','purple','yellow','pink','cream')]
+        for tex in self.uniforms:
+            tex.setMinfilter(Texture.FTLinearMipmapLinear); tex.setMagfilter(Texture.FTLinear)
         self.obstacles=[]
         self.dynamic=self.root.attachNewNode('dynamic-food')
         self._fingerprint=None
-        self.customers=[]
+        self.customers=[]; self.customer_actors=[]
+        self.player_root=self.root.attachNewNode('co-op-players')
+        self.players={}
         self._make_lighting()
         self._make_room()
         self._make_kitchen()
@@ -85,7 +68,7 @@ class DinerWorld:
     def _make_room(self):
         # Floors: 3D texture coordinates are repeated rather than stretched.
         self.b((0,0,-.12),(18,18,.22),WHITE,'floor_terracotta',(5,5))
-        self.b((0,3.8,.006),(17.8,10.3,.025),WHITE,'checker',(4,2))
+        self.b((0,3.8,.006),(17.8,10.3,.025),WHITE,'wood_detail',(4,3))
         self.b((0,0,4.35),(18.2,18.2,.22),(.94,.91,.82,1),'plaster',(4,4))
         # Rear and side walls, with a tiled waist-high band.
         self.b((0,-9,2.15),(18.2,.22,4.3),WHITE,'plaster',(5,1.5))
@@ -105,13 +88,13 @@ class DinerWorld:
         for x in (-9,-6,-3,0,3,6,9):
             self.b((x,9,2.30),(.14,.24,3),DEEP)
         self.b((0,9,2.35),(17.8,.06,2.9),(.63,.81,.80,.13))
-        # Sunny outdoor backdrop, road, trees and broad pavement.
-        self.b((0,17,4),(37,.12,11),WHITE,'sky',(1,1))
+        # A continuous independently created exterior, visible through the
+        # dining windows, replaces the former rows of blocky placeholder trees.
+        back=self.b((0,17,2.7),(34,.12,14.4),WHITE,'window_view')
+        back.setLightOff(1)
+        side=self.b((16,4,2.7),(.12,34,14.4),WHITE,'window_view')
+        side.setLightOff(1)
         self.b((0,13,-.21),(42,12,.12),(.69,.75,.67,1),'asphalt',(5,2))
-        for x in range(-18,19,7):
-            self.c((x,13.6,1.25),(.32,.32,2.5),(.43,.32,.22,1))
-            for dx,dz in [(-.6,2.6),(.55,2.65),(0,3.3)]:
-                sphere(self.root,(x+dx,13.6,dz),(2.3,1.9,2.2),(.30,.52,.31,1))
         for x in range(-8,9,3):
             self.b((x,7.9,.015),(1.4,.4,.025),(1,.78,.30,1))
         # Ceiling ribs and industrial hanging lights.
@@ -144,17 +127,28 @@ class DinerWorld:
     def _make_kitchen(self):
         # Main counter, stainless tabletop, framed inset panels.
         self.b((.1,-.80,.47),(12.8,1.25,.94),RED)
-        self.b((.1,-.80,.99),(13.0,1.35,.12),WHITE,'steel',(4,1))
+        self.b((.1,-.80,.99),(13.0,1.35,.12),WHITE,'stone_detail',(5,1))
         self.b((.1,-1.44,.54),(12.7,.045,.58),(.91,.81,.64,1))
         for x in [-5.5,-4.1,-2.7,-1.3,.1,1.5,2.9,4.3,5.7]:
             self.b((x,-1.475,.54),(1.15,.025,.40),(.70,.71,.66,1),'steel')
         self.obstacle(-6.5,6.7,-1.48,-.15)
         # Rear cooking line and extraction hood.
-        self.b((0,-8.22,.49),(12.5,1.4,.98),STEEL,'steel',(4,1))
-        self.b((0,-8.22,1.04),(12.6,1.5,.12),WHITE,'steel',(5,1))
+        self.b((0,-8.22,.49),(12.5,1.4,.98),STEEL,'steel_detail',(4,1))
+        self.b((0,-8.22,1.04),(12.6,1.5,.12),WHITE,'steel_detail',(5,1))
         self.obstacle(-6.3,6.3,-8.95,-7.45)
         self.b((-.2,-8.55,3.18),(11.8,1.1,.55),(.65,.69,.67,1),'steel',(4,1))
         self.b((-.2,-7.95,3.05),(11.7,.15,.12),(.43,.48,.47,1))
+        # Cabinet seams, pulls, rivets and ventilation make the line read as
+        # actual kitchen equipment rather than a single metal box.
+        for x in (-5.4,-4.0,-2.6,-1.2,.2,1.6,3.0,4.4,5.8):
+            self.b((x,-7.505,.48),(1.22,.026,.66),(.58,.63,.61,1),'steel_detail')
+            self.b((x,-7.478,.64),(.54,.035,.035),(.25,.29,.28,1))
+            for dx in (-.50,.50):
+                self.c((x+dx,-7.475,.22),(.035,.035,.015),(.22,.25,.24,1)).setP(90)
+        for x in (-4.8,-3.0,-1.2,.6,2.4,4.2):
+            self.b((x,-7.975,3.20),(1.45,.025,.32),(.42,.46,.44,1))
+            for i in range(6):
+                self.b((x-.58+i*.23,-7.955,3.20),(.07,.018,.26),(.64,.68,.65,1))
         # Fridge with handle, hinges, a little note and a blue cold indicator.
         self.b((-8.05,-5.25,1.32),(1.35,1.8,2.64),(.70,.76,.73,1),'steel')
         self.b((-7.34,-5.25,1.4),(.09,1.68,2.48),(.86,.89,.83,1),'steel')
@@ -170,7 +164,8 @@ class DinerWorld:
             self.c((x,-7.45,1.12),(.12,.12,.05),(.89,.31,.13,1)).setP(90)
         self.b((-2.07,-7.75,1.29),(.13,.52,.035),(.78,.79,.74,1)).setH(-24)
         self.b((-1.96,-7.51,1.31),(.10,.25,.06),(.25,.20,.15,1)).setH(-24)
-        self._station_label('ГРИЛЬ',-3.25,-7.35,.78,180)
+        for index,x in enumerate((-4.05,-3.25,-2.45),1):
+            self._station_label('ГРИЛЬ '+str(index),x,-7.35,.78,180)
         # Fryer and separate stainless splashback.
         self.b((3.35,-8.05,1.18),(2,1.05,.22),(.34,.38,.37,1),'steel')
         self.b((3.35,-8.02,1.305),(1.52,.74,.07),(.25,.23,.16,1))
@@ -213,6 +208,23 @@ class DinerWorld:
             self.b((x,-1.29,1.34),(.10,.04,.23),(.16,.18,.16,1))
         self.c((5.8,-.82,1.26),(.27,.27,.38),CREAM)
         self._station_label('НАПИТКИ',4.85,-1.505,.78)
+        # Dedicated espresso machine and mugs on the front counter.
+        self.b((6.20,-.83,1.45),(.85,.75,.82),(.27,.30,.28,1),'steel_detail')
+        self.b((6.20,-1.22,1.53),(.70,.035,.53),(.14,.18,.17,1))
+        self.b((6.20,-1.245,1.73),(.40,.025,.16),(.78,.72,.55,1))
+        for x in (6.07,6.20,6.33):
+            self.c((x,-1.265,1.73),(.05,.05,.03),(.89,.32,.16,1)).setP(90)
+        self.c((6.20,-1.0,1.29),(.26,.26,.25),CREAM)
+        self._station_label('КОФЕ',6.20,-1.505,.78)
+        # Outside trash container and a janitor's cleaning cabinet.
+        self.b((8.40,-3.60,.58),(.82,1.15,1.16),(.20,.33,.27,1))
+        self.b((8.40,-3.60,1.20),(.90,1.24,.14),(.13,.24,.19,1))
+        self.b((7.97,-3.60,.71),(.035,.70,.29),CREAM)
+        self.obstacle(7.96,8.85,-4.23,-2.97)
+        self.b((-7.75,1.82,.70),(1.15,.74,1.40),(.44,.48,.42,1),'steel')
+        self.b((-7.75,2.20,.95),(.70,.025,.31),DEEP)
+        self.text('УБОРКА',(-7.75,2.225,.90),.12,CREAM,heading=180)
+        self.obstacle(-8.35,-7.15,1.40,2.20)
         # Back shelf: boxes, condiment bottles and a tiny wall clock.
         self.b((-6.7,-8.66,2.65),(2.8,.55,.10),(.43,.31,.22,1),'wood')
         for i in range(4):
@@ -226,7 +238,7 @@ class DinerWorld:
         # Booths and dining tables, all with real 3D volume.
         for x in (-5.8,2.5):
             for y in (3.4,6.9):
-                self.b((x,y,.66),(2.15,1.20,.12),WHITE,'wood')
+                self.b((x,y,.66),(2.15,1.20,.12),WHITE,'stone_detail')
                 self.c((x,y,.34),(.16,.16,.64),(.37,.40,.37,1))
                 self.c((x,y,.06),(.78,.78,.08),(.28,.31,.29,1))
                 self.obstacle(x-1.10,x+1.10,y-.62,y+.62)
@@ -247,38 +259,101 @@ class DinerWorld:
         self.b((0,-.35,2.72),(4.0,.16,.48),DEEP)
         self.text('ORDER  •  PICK UP',(0,-.24,2.62),.23,CREAM,heading=180)
 
+    def _make_person(self, parent, slot, worker=False):
+        # The CC0 MakeHuman mesh uses two levels of detail.  Its separately
+        # licensed CC0 motion clips are baked into the portable Panda3D BAM.
+        path='assets/models/crew_player.bam' if worker else 'assets/models/crew_lod2.bam'
+        body=Actor(Filename.fromOsSpecific(str(Path(path).resolve()))); body.reparentTo(parent)
+        geom=body.find('**/+GeomNode').node()
+        for i in range(geom.getNumGeoms()):
+            state=geom.getGeomState(i)
+            material=state.getAttrib(MaterialAttrib)
+            texture=state.getAttrib(TextureAttrib)
+            if material and texture and material.getMaterial().getName()=='outfit':
+                stage=texture.getOnStage(0)
+                geom.setGeomState(i,state.setAttrib(texture.addOnStage(stage,self.uniforms[slot % len(self.uniforms)])))
+        body.loop('unarmed_idle')
+        return body
+
     def _make_customers(self):
-        skins=[(.80,.57,.42,1),(.53,.34,.24,1),(.91,.70,.54,1)]
-        shirts=[(.28,.48,.57,1),(.82,.47,.31,1),(.46,.58,.39,1)]
-        for i in range(3):
+        for i in range(6):
             root=self.root.attachNewNode('guest-'+str(i))
-            x=-4.75+i*.82; y=.55+i*.70
+            x=-4.75+(i%3)*.82; y=.55+(i//3)*1.05
             root.setPos(x,y,0)
-            self.c((0,0,.83),(.62,.43,.95),shirts[i],parent=root)
-            self.c((-.16,0,.23),(.20,.22,.47),(.19,.24,.27,1),parent=root)
-            self.c((.16,0,.23),(.20,.22,.47),(.19,.24,.27,1),parent=root)
-            sphere(root,(0,0,1.55),(.52,.48,.60),skins[i])
-            sphere(root,(0,.02,1.79),(.55,.50,.21),(.25,.19,.16,1))
-            # faces look toward the kitchen, i.e. negative Y.
-            for dx in (-.11,.11):
-                sphere(root,(dx,-.242,1.59),(.055,.03,.065),(.09,.11,.10,1))
-            for dx in (-.38,.38):
-                self.c((dx,0,.83),(.17,.19,.73),shirts[i],parent=root)
-                sphere(root,(dx,0,.45),(.19,.19,.20),skins[i])
+            body=self._make_person(root,(i+3)%len(self.uniforms))
+            body.setScale(.96+(i%3)*.025)
+            body.setPlayRate(.88+i*.05,'unarmed_idle')
+            # Keep the Python Actor alive; otherwise its destructor drops the
+            # animation controls while the visible mesh remains in a T-pose.
+            self.customer_actors.append(body)
             root.hide()
             self.customers.append(root)
 
     def update_customers(self, shift, clock):
         for i,c in enumerate(self.customers):
             if i < len(shift.orders):
-                c.show(); c.setZ(.018*math.sin(clock*2+i)); c.setH(3*math.sin(clock*.75+i))
+                c.show(); c.setZ(.008*math.sin(clock*2+i)); c.setH(2*math.sin(clock*.75+i))
             else: c.hide()
+
+    def _make_player(self, name, slot):
+        root=self.player_root.attachNewNode('teammate')
+        body=self._make_person(root,slot,worker=True)
+        # This model faces -Y at heading zero; players face +Y at heading zero.
+        body.setH(180)
+        hand=body.attachNewNode('carried-item'); hand.setPos(-.35,-.08,.79)
+        label=TextNode('player-name'); label.setFont(self.font); label.setText(name)
+        label.setAlign(TextNode.ACenter); label.setTextColor(1,.96,.83,1)
+        label.setShadow(.03,.03); label.setShadowColor(0,0,0,.8)
+        name_node=root.attachNewNode(label); name_node.setPos(0,0,2.03); name_node.setScale(.12)
+        name_node.setBillboardPointEye()
+        return {'root':root,'body':body,'hand':hand,'held':None,'target':None,
+                'moving_until':0.0,'animation':'unarmed_idle'}
+
+    def clear_players(self):
+        for actor in self.players.values():
+            actor['body'].cleanup(); actor['root'].removeNode()
+        self.players.clear()
+
+    def update_players(self, players, local_id, clock, dt):
+        remote={p['id']:p for p in players if p.get('id') != local_id}
+        for pid in set(self.players)-set(remote):
+            actor=self.players.pop(pid)
+            actor['body'].cleanup(); actor['root'].removeNode()
+        for pid, data in remote.items():
+            actor=self.players.get(pid)
+            if not actor:
+                actor=self._make_player(data.get('name','Игрок'), int(data.get('slot',0)))
+                actor['root'].setPos(float(data['x']),float(data['y']),0)
+                self.players[pid]=actor
+            target=(float(data['x']),float(data['y']))
+            if actor['target'] and math.hypot(target[0]-actor['target'][0],target[1]-actor['target'][1])>.025:
+                actor['moving_until']=clock+.35
+            actor['target']=target
+            root=actor['root']; alpha=min(1.0,max(0.0,dt)*10)
+            root.setX(root.getX()+(target[0]-root.getX())*alpha)
+            root.setY(root.getY()+(target[1]-root.getY())*alpha)
+            heading=float(data.get('heading',0))
+            turn=(heading-root.getH()+180)%360-180
+            root.setH(root.getH()+turn*alpha)
+            animation='unarmed_walk' if clock<actor['moving_until'] else 'unarmed_idle'
+            if animation!=actor['animation']:
+                actor['body'].loop(animation); actor['animation']=animation
+            held=data.get('held'); fingerprint=(held.get('kind'),tuple(held.get('toppings',[]))) if held else None
+            if fingerprint != actor['held']:
+                actor['held']=fingerprint
+                actor['hand'].node().removeAllChildren()
+                if held:
+                    self._food(actor['hand'],held['kind'],(0,0,0),.55,frozenset(held.get('toppings',[])))
 
     def _food(self,parent,kind,pos=(0,0,0),scale=1,toppings=frozenset()):
         root=parent.attachNewNode('food-'+kind); root.setPos(*pos); root.setScale(scale)
         if kind in ('raw_patty','cooked_patty','burnt_patty'):
             color={'raw_patty':(.78,.36,.30,1),'cooked_patty':(.63,.38,.20,1),'burnt_patty':(.20,.16,.13,1)}[kind]
             self.c((0,0,.06),(.54,.54,.12),color,'patty',parent=root)
+            if kind == 'cooked_patty':
+                for x in (-.16, -.08, 0, .08, .16):
+                    stripe=self.b((x,0,.123),(.018,.36,.004),(.22,.13,.08,1),parent=root)
+                    stripe.setH(-20)
         elif kind in TOPPING_NAMES:
             if kind=='cheese': self.b((0,0,.03),(.53,.53,.055),YELLOW,parent=root)
             elif kind=='lettuce':
@@ -312,22 +387,32 @@ class DinerWorld:
             self.c((0,0,.22),(.37,.37,.44),RED,parent=root)
             self.c((0,0,.45),(.39,.39,.04),CREAM,parent=root)
             straw=self.c((.08,0,.59),(.038,.038,.30),CREAM,parent=root); straw.setP(-12)
+        elif kind=='coffee':
+            self.c((0,0,.20),(.35,.35,.40),(.93,.88,.75,1),parent=root)
+            self.c((0,0,.405),(.37,.37,.035),(.28,.20,.15,1),parent=root)
+            self.b((.20,0,.22),(.12,.10,.19),(.87,.82,.70,1),parent=root)
+        elif kind=='trash_bag':
+            sphere(root,(0,0,.25),(.50,.46,.58),(.12,.14,.13,1))
+            self.c((0,0,.56),(.13,.13,.12),(.16,.18,.16,1),parent=root)
         return root
 
     def update_food(self, shift):
-        patty_fingerprint=None
-        if shift.patty:
-            patty_fingerprint=(shift.patty.status(),int(shift.patty.sides[shift.patty.face_down]//20))
-        fp=(tuple(shift.board), patty_fingerprint, shift.fryer.status(shift.fryer_seconds))
+        patties = tuple((key, p.status(), int(p.sides[p.face_down] // 20))
+                        for key, p in shift.patties.items() if p)
+        fp=(tuple(shift.board), patties, shift.fryer.status(shift.fryer_seconds),
+            shift.coffee.status(shift.coffee_seconds), shift.trash_count, shift.dirty_tables)
         if fp == self._fingerprint: return
         self._fingerprint=fp
         self.dynamic.node().removeAllChildren()
-        if shift.patty:
-            kind='burnt_patty' if shift.patty.burnt else ('cooked_patty' if shift.patty.ready else 'raw_patty')
-            self._food(self.dynamic,kind,(-3.25,-8,1.29),1.3)
+        for key, patty in shift.patties.items():
+            if patty:
+                kind='burnt_patty' if patty.burnt else ('cooked_patty' if patty.ready else 'raw_patty')
+                self._food(self.dynamic,kind,(STATION_BY_KEY[key].x,-8,1.29),1.1)
         if shift.fryer.active:
             kind='burnt_fries' if shift.fryer.status(shift.fryer_seconds)=='СГОРЕЛА' else 'fries'
             f=self._food(self.dynamic,kind,(3.35,-8.02,1.32),.65); f.setZ(1.22)
+        if shift.coffee.active:
+            self._food(self.dynamic,'coffee',(6.20,-.91,1.15),.7)
         if shift.board:
             self._food(self.dynamic,'bun',(-2.8,-.84,1.16),1.1)
             z=1.31
@@ -335,12 +420,19 @@ class DinerWorld:
                 kind='cooked_patty' if ingredient=='patty' else ingredient
                 self._food(self.dynamic,kind,(-2.8,-.84,z),1.05)
                 z+=.09
+        # Used trays show that tables need cleaning, rather than only a number in the HUD.
+        for i in range(shift.dirty_tables):
+            x=(-5.8,2.5,-5.8,2.5)[i]; y=(3.4,3.4,6.9,6.9)[i]
+            self.b((x,y,.75),(.76,.48,.04),(.23,.20,.17,1),parent=self.dynamic)
+            self.c((x,y,.79),(.30,.30,.035),(.73,.72,.65,1),parent=self.dynamic)
 
     def make_held(self, parent, item):
         root=parent.attachNewNode('held-item')
-        # Parent is the camera, whose local +Y is forward, +Z is up.
-        root.setPos(.42,1.15,-.45); root.setHpr(-15,0,0)
-        if item: self._food(root,item.kind,(0,0,0),.85,item.toppings)
+        # A small sleeve and hand keep food from floating in mid-air.
+        root.setPos(.48,1.25,-.52); root.setHpr(-15,0,0)
+        self.b((.09,-.02,-.16),(.23,.32,.18),(.20,.26,.24,1),parent=root)
+        sphere(root,(0,.02,-.075),(.27,.22,.12),(.78,.57,.43,1))
+        if item: self._food(root,item.kind,(0,0,0),.68,item.toppings)
         return root
 
     def can_walk(self,x,y,radius=.30):

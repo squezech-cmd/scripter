@@ -1,0 +1,21 @@
+Character and animation assets used in Burger Shift: Diner Edition
+
+The human character is derived from the CC0 1.0 player_base.glb created by
+project artist Atlas using MPFB2 / MakeHuman for UIC-campus-game:
+https://github.com/sthak34-sudo/UIC-campus-game/blob/b93933d3ec1bc26332cab5bdb713830c6d6d8f41/client/public/models/characters/player_base.glb
+SHA-256 of source: efc00efe4f8c1cb0f7fbe9cfbcead36ba10659fdd1e4772d74aac6e97c3c1d61
+
+The idle, walk and run clips are derived from the CC0 1.0 Universal Animation
+Library (Standard) by Quaternius, retargeted to this body by UIC-campus-game:
+https://quaternius.com/packs/universalanimationlibrary.html
+https://github.com/sthak34-sudo/UIC-campus-game/blob/b93933d3ec1bc26332cab5bdb713830c6d6d8f41/client/public/models/characters/player_anims_cc0.glb
+SHA-256 of source: 737c79b1c776ca4d540d361bafd3a456004fa1c2c078d9eac7547e7247e0a59e
+
+Source project attribution and CC0 declaration:
+https://github.com/sthak34-sudo/UIC-campus-game/blob/b93933d3ec1bc26332cab5bdb713830c6d6d8f41/CREDITS.md
+
+The meshes were reduced to two source LODs, the animation clips were selected
+and combined, textures were decoded and resized, shirt lettering was removed,
+and colour variations were made. The result was converted to Panda3D BAM.
+CC0 1.0 legal text is in CC0-1.0.txt. No original Burger Shift: Team Rush
+assets are used.

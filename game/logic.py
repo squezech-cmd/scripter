@@ -13,6 +13,8 @@ import random
 import tempfile
 from typing import Optional
 
+from .stations import GRILL_KEYS
+
 TOPPING_NAMES = {
     "cheese": "сыр",
     "lettuce": "салат",
@@ -27,6 +29,8 @@ ITEM_NAMES = {
     "fries": "картофель фри",
     "burnt_fries": "сгоревшая картошка",
     "soda": "газировка",
+    "coffee": "кофе",
+    "trash_bag": "мешок мусора",
     **TOPPING_NAMES,
 }
 
@@ -104,6 +108,21 @@ class Fryer:
 
 
 @dataclass
+class CoffeeMachine:
+    elapsed: float = 0.0
+    active: bool = False
+
+    def tick(self, dt: float) -> None:
+        if self.active:
+            self.elapsed += max(0.0, dt)
+
+    def status(self, ready_after: float) -> str:
+        if not self.active:
+            return "ПУСТО"
+        return "ГОТОВ" if self.elapsed >= ready_after else "ВАРИТСЯ"
+
+
+@dataclass
 class Order:
     number: int
     recipe: Recipe
@@ -114,10 +133,14 @@ class Order:
     burger_done: bool = False
     fries_done: bool = False
     soda_done: bool = False
+    needs_coffee: bool = False
+    coffee_done: bool = False
 
     @property
     def complete(self) -> bool:
-        return self.burger_done and (not self.needs_fries or self.fries_done) and (not self.needs_soda or self.soda_done)
+        return (self.burger_done and (not self.needs_fries or self.fries_done)
+                and (not self.needs_soda or self.soda_done)
+                and (not self.needs_coffee or self.coffee_done))
 
     @property
     def percent(self) -> float:
@@ -125,7 +148,8 @@ class Order:
 
     @property
     def price(self) -> int:
-        return self.recipe.price + (7 if self.needs_fries else 0) + (5 if self.needs_soda else 0)
+        return (self.recipe.price + (7 if self.needs_fries else 0)
+                + (5 if self.needs_soda else 0) + (6 if self.needs_coffee else 0))
 
 
 @dataclass
@@ -191,19 +215,26 @@ class Result:
 
 class Shift:
     DURATION = 240.0
-    MAX_ORDERS = 3
+    MAX_ORDERS = 6
+    TRASH_LIMIT = 5
 
-    def __init__(self, profile: Optional[Profile] = None, seed: Optional[int] = None):
+    def __init__(self, profile: Optional[Profile] = None, seed: Optional[int] = None,
+                 team_size: int = 1):
         self.profile = profile or Profile()
         self.rng = random.Random(seed)
+        self.team_size = max(1, min(8, int(team_size)))
         self.remaining = self.DURATION
-        self.spawn_in = 36.0
+        self.spawn_in = max(20.0, 36.0 - (self.team_size - 1) * 3.0)
         self.orders: list[Order] = []
         self.next_number = 1
         self.held: Optional[Item] = None
         self.board: list[str] = []
-        self.patty: Optional[Patty] = None
+        self.patties: dict[str, Optional[Patty]] = {key: None for key in GRILL_KEYS}
         self.fryer = Fryer()
+        self.coffee = CoffeeMachine()
+        self.trash_count = 0
+        self.dirty_tables = 0
+        self.cleaned = 0
         self.earnings = 0
         self.served = 0
         self.lost = 0
@@ -211,6 +242,23 @@ class Shift:
         self.finished = False
         self._credited = False
         self._spawn(first=True)
+
+    # Compatibility for the original central grill and existing solo saves/tests.
+    @property
+    def patty(self) -> Optional[Patty]:
+        return self.patties['grill']
+
+    @patty.setter
+    def patty(self, value: Optional[Patty]) -> None:
+        self.patties['grill'] = value
+
+    @property
+    def max_orders(self) -> int:
+        return min(self.MAX_ORDERS, max(3, self.team_size + 2))
+
+    @property
+    def coffee_seconds(self) -> float:
+        return 5.0
 
     @property
     def grill_seconds(self) -> float:
@@ -226,8 +274,9 @@ class Shift:
         # The first customer is a guided burger-only ticket.
         order = Order(self.next_number, recipe,
                       False if first else self.rng.random() < 0.48,
-                      False if first else self.rng.random() < 0.45,
-                      patience, patience)
+                      False if first else self.rng.random() < 0.38,
+                      patience, patience,
+                      needs_coffee=False if first else self.rng.random() < 0.30)
         self.next_number += 1
         self.orders.append(order)
         return order
@@ -238,11 +287,16 @@ class Shift:
         # Never advance cooking after the clock reaches zero.
         dt = min(float(dt), self.remaining)
         events: list[Result] = []
-        if self.patty:
-            before = self.patty.burnt
-            self.patty.tick(dt, self.grill_seconds)
-            if not before and self.patty.burnt:
-                events.append(Result(False, "Котлета сгорела! Убери её в корзину.", "bad"))
+        for patty in self.patties.values():
+            if patty:
+                before = patty.burnt
+                patty.tick(dt, self.grill_seconds)
+                if not before and patty.burnt:
+                    events.append(Result(False, "Котлета сгорела! Убери её в корзину.", "bad"))
+        previous_coffee = self.coffee.status(self.coffee_seconds)
+        self.coffee.tick(dt)
+        if previous_coffee != 'ГОТОВ' and self.coffee.status(self.coffee_seconds) == 'ГОТОВ':
+            events.append(Result(True, "Кофе готов!", "ding"))
         previous_fryer = self.fryer.status(self.fryer_seconds)
         self.fryer.tick(dt)
         current_fryer = self.fryer.status(self.fryer_seconds)
@@ -259,10 +313,11 @@ class Shift:
                 events.append(Result(False, f"Гость #{order.number} не дождался заказа.", "bad"))
         self.spawn_in -= dt
         if self.spawn_in <= 0 and self.remaining > 35:
-            if len(self.orders) < self.MAX_ORDERS:
+            if len(self.orders) < self.max_orders:
                 new = self._spawn()
                 events.append(Result(True, f"Новый заказ #{new.number}", "ding"))
-                self.spawn_in = max(25.0, 38.0 - (self.profile.day - 1) * 1.4)
+                self.spawn_in = max(18.0, 38.0 - (self.profile.day - 1) * 1.4
+                                    - (self.team_size - 1) * 3.0)
             else:
                 self.spawn_in = 5.0
         self.remaining -= dt
@@ -289,25 +344,26 @@ class Shift:
                 return Result(False, "Сначала освободи руки.", "bad")
             self.held = Item("raw_patty")
             return Result(True, "Сырая котлета в руках. Отнеси её на гриль.", "pickup")
-        if station == "grill":
+        if station in GRILL_KEYS:
+            patty = self.patties[station]
             if self.held and self.held.kind == "raw_patty":
-                if self.patty:
-                    return Result(False, "На гриле уже есть котлета.", "bad")
-                self.patty = Patty()
+                if patty:
+                    return Result(False, "На этой части гриля уже есть котлета.", "bad")
+                self.patties[station] = Patty()
                 self.held = None
                 return Result(True, "Котлета на гриле. Нажми F, чтобы перевернуть.", "sizzle")
             if self.held:
                 return Result(False, "Освободи руки, чтобы снять котлету.", "bad")
-            if self.patty is None:
+            if patty is None:
                 return Result(False, "Гриль пуст. Возьми котлету в холодильнике.")
-            if self.patty.burnt:
+            if patty.burnt:
                 self.held = Item("burnt_patty")
-                self.patty = None
+                self.patties[station] = None
                 return Result(False, "Котлета сгорела. Выброси её в корзину.", "bad")
-            if not self.patty.ready:
+            if not patty.ready:
                 return Result(False, "Прожарь обе стороны. F — перевернуть.")
             self.held = Item("cooked_patty")
-            self.patty = None
+            self.patties[station] = None
             return Result(True, "Котлета готова! Отнеси её на стол сборки.", "pickup")
         if station == "board":
             if not self.held:
@@ -348,22 +404,58 @@ class Shift:
                 return Result(False, "Сначала освободи руки.", "bad")
             self.held = Item("soda")
             return Result(True, "Газировка готова к выдаче.", "pickup")
+        if station == "coffee":
+            if self.held:
+                return Result(False, "Сначала освободи руки.", "bad")
+            status = self.coffee.status(self.coffee_seconds)
+            if status == "ПУСТО":
+                self.coffee = CoffeeMachine(active=True)
+                return Result(True, "Кофе готовится. Вернись за ним через несколько секунд.", "click")
+            if status == "ВАРИТСЯ":
+                return Result(False, "Кофе ещё готовится.")
+            self.coffee = CoffeeMachine()
+            self.held = Item("coffee")
+            return Result(True, "Кофе готов к выдаче.", "pickup")
         if station == "service":
             return self._serve()
         if station == "bin":
+            if self.held and self.held.kind == 'trash_bag':
+                return Result(False, "Отнеси мешок в контейнер у правой стены.")
+            if self.trash_count >= self.TRASH_LIMIT:
+                if self.held:
+                    return Result(False, "Корзина полна. Освободи руки, прежде чем взять мешок.", "bad")
+                self.held = Item("trash_bag")
+                self.trash_count = 0
+                return Result(True, "Мешок заполнен. Отнеси его к контейнеру.", "trash")
             if self.held:
-                self.held = None
-                return Result(True, "Предмет выброшен.", "trash")
+                return self.discard_held()
             if self.board:
                 self.board = []
-                return Result(True, "Доска очищена.", "trash")
-            return Result(False, "Выбрасывать нечего.")
+                self.trash_count = min(self.TRASH_LIMIT, self.trash_count + 1)
+                return Result(True, f"Доска очищена. Мусор: {self.trash_count}/{self.TRASH_LIMIT}.", "trash")
+            return Result(False, f"Корзина: {self.trash_count}/{self.TRASH_LIMIT}. Когда заполнится, вынеси мешок.")
+        if station == "dumpster":
+            if not self.held or self.held.kind != "trash_bag":
+                return Result(False, "Принеси сюда полный мешок из корзины.")
+            self.held = None
+            self.earnings += 3
+            return Result(True, "Мусор вынесен. За чистоту +$3!", "success")
+        if station == "clean":
+            if not self.dirty_tables:
+                return Result(False, "Все столы чистые.")
+            if self.held:
+                return Result(False, "Освободи руки, чтобы убрать стол.", "bad")
+            self.dirty_tables -= 1
+            self.cleaned += 1
+            self.earnings += 2
+            return Result(True, "Стол убран. За чистоту +$2!", "success")
         return Result(False, "Здесь пока нечего делать.")
 
-    def flip(self) -> Result:
-        if not self.patty:
-            return Result(False, "На гриле нет котлеты.")
-        self.patty.flip()
+    def flip(self, station: str = "grill") -> Result:
+        patty = self.patties.get(station)
+        if not patty:
+            return Result(False, "На этой части гриля нет котлеты.")
+        patty.flip()
         return Result(True, "Котлета перевёрнута.", "flip")
 
     def wrap(self) -> Result:
@@ -376,9 +468,13 @@ class Shift:
         return Result(True, "Бургер завёрнут! Отнеси его к выдаче.", "pickup")
 
     def discard_held(self) -> Result:
+        if self.held and self.held.kind == 'trash_bag':
+            return Result(False, "Отнеси мешок в контейнер у правой стены.", "bad")
         if self.held:
             self.held = None
-            return Result(True, "Предмет убран.", "trash")
+            self.trash_count = min(self.TRASH_LIMIT, self.trash_count + 1)
+            suffix = ' Корзина полна!' if self.trash_count >= self.TRASH_LIMIT else ''
+            return Result(True, f"Предмет убран. Мусор: {self.trash_count}/{self.TRASH_LIMIT}.{suffix}", "trash")
         return Result(False, "Руки уже свободны.")
 
     def _serve(self) -> Result:
@@ -401,6 +497,10 @@ class Shift:
                 order.soda_done = True
                 chosen = order
                 break
+            if item.kind == "coffee" and order.needs_coffee and not order.coffee_done:
+                order.coffee_done = True
+                chosen = order
+                break
         if chosen is None:
             return Result(False, "Этот предмет не подходит ни к одному заказу. Проверь состав.", "bad")
         self.held = None
@@ -411,12 +511,19 @@ class Shift:
         self.earnings += payment
         self.served += 1
         self.streak += 1
+        self.dirty_tables = min(4, self.dirty_tables + 1)
         self.orders.remove(chosen)
         return Result(True, f"Заказ #{chosen.number} выдан! +${payment} (чаевые ${tip})", "success")
 
     def tutorial(self) -> str:
+        if self.held and self.held.kind == 'trash_bag':
+            return "Отнеси мешок к КОНТЕЙНЕРУ у правой стены."
         if self.served:
-            return "Следи за заказами: жарь с двух сторон, собирай и выдавай вовремя."
+            if self.trash_count >= self.TRASH_LIMIT:
+                return "Корзина полна: забери мешок и вынеси его в контейнер."
+            if self.dirty_tables:
+                return "После гостей можно убрать столы в зале и получить бонус."
+            return "Следи за заказами: бургеры, фри, газировка и кофе."
         if self.held:
             return {
                 "raw_patty": "Отнеси котлету на ГРИЛЬ и нажми E.",
@@ -425,14 +532,15 @@ class Shift:
                 "burger": "Отнеси готовый бургер к ВЫДАЧЕ и нажми E.",
                 "burnt_patty": "Котлета сгорела: выброси её в корзину или нажми Q.",
             }.get(self.held.kind, "Ориентируйся на состав заказа справа.")
-        if self.patty:
-            if self.patty.burnt:
+        patty = next((p for p in self.patties.values() if p), None)
+        if patty:
+            if patty.burnt:
                 return "Забери сгоревшую котлету и выброси в корзину."
-            if self.patty.ready:
+            if patty.ready:
                 return "Котлета готова! Забери её с гриля клавишей E."
-            if self.patty.sides[self.patty.face_down] >= 85 and min(self.patty.sides) < 85:
+            if patty.sides[patty.face_down] >= 85 and min(patty.sides) < 85:
                 return "Пора перевернуть котлету: наведи на гриль и нажми F."
-            return "Жарь котлету с двух сторон. F — перевернуть, E — забрать."
+            return "Жарь котлеты на трёх участках гриля. F — перевернуть, E — забрать."
         if "patty" in self.board:
             if "cheese" not in self.board:
                 return "Возьми СЫР на стойке и добавь его к бургеру на доске."

@@ -1,7 +1,7 @@
 """Wrap Panda3D's Windows build in one self-extracting, auto-starting EXE.
 
 Downloads pinned public-domain 7-Zip SDK SFX and pinned 7za compressor when
-needed. No web service or game server is contacted by the finished game.
+needed. The game uses direct TCP connections only when the player selects co-op.
 """
 from __future__ import annotations
 import argparse

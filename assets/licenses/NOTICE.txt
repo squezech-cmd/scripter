@@ -22,3 +22,5 @@ https://launchpad.net/ubuntu/bionic/+source/nvidia-cg-toolkit/+copyright
 https://www.7-zip.org/sdk.html
 
 DejaVu fonts: see ../fonts/LICENSE-DejaVu.txt.
+
+CC0 character models and animations: see CC0-characters.txt and CC0-1.0.txt.

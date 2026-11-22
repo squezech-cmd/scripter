@@ -1,1 +1,1 @@
-"""Original single-player cooking game inspired by fast-food shift simulators."""
+"""Independent cooking game with solo and host-authoritative co-op modes."""

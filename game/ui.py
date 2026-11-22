@@ -1,6 +1,6 @@
 """Native Panda3D interface, with Cyrillic text and no browser component."""
 from __future__ import annotations
-from direct.gui.DirectGui import DirectButton, DirectFrame, DGG
+from direct.gui.DirectGui import DirectButton, DirectEntry, DirectFrame, DGG
 from direct.gui.OnscreenImage import OnscreenImage
 from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import TextNode, TransparencyAttrib
@@ -19,6 +19,7 @@ class Interface:
         self.overlay=game.aspect2d.attachNewNode('overlay')
         self.order_widgets=[]
         self._overlay_widgets=[]
+        self.lobby_entry=None
         self._make_hud()
         self.hud.hide()
         self.notice_timer=0
@@ -46,10 +47,21 @@ class Interface:
                             borderWidth=(0,0))
         return self._track_overlay(parent, widget)
 
+    def entry(self, parent, text, x, z, width, command=None, size=.043):
+        # DirectEntry measures its width in character units before scaling.
+        char_width=width/size
+        widget=DirectEntry(parent=parent,entryFont=self.font,initialText=text,scale=size,
+                           pos=(x,0,z),width=char_width-.4,numLines=1,overflow=0,
+                           frameSize=(-.18,char_width,-.30,1.15),frameColor=(.055,.12,.11,1),
+                           text_fg=CREAM,cursorKeys=1,focus=0,command=command,
+                           rolloverSound=None,clickSound=None)
+        return self._track_overlay(parent,widget)
+
     def clear_overlay(self):
         for widget in reversed(self._overlay_widgets):
             widget.destroy()
         self._overlay_widgets=[]
+        self.lobby_entry=None
         for child in self.overlay.getChildren(): child.removeNode()
 
     def _make_hud(self):
@@ -71,12 +83,12 @@ class Interface:
         self.mission=self.label(self.hud,'',-a+.105,.635,.038,CREAM,True,may_change=True)
         self.submission=self.label(self.hud,'',-a+.105,.585,.029,MUTED,may_change=True)
 
-        # Three independent order tickets, with a patience indicator.
+        # A large crew can have up to six simultaneous orders.
         self.label(self.hud,'ЗАКАЗЫ',a-.78,.76,.033,CREAM,True)
-        for i in range(3):
-            z=.71-i*.245
-            card=self.frame(self.hud,a-.79,z,.72,.218,(.97,.93,.82,.97))
-            self.frame(card,0,0,.018,.218,ORANGE)
+        for i in range(6):
+            z=.71-i*.222
+            card=self.frame(self.hud,a-.79,z,.72,.205,(.97,.93,.82,.97))
+            self.frame(card,0,0,.018,.205,ORANGE)
             title=self.label(card,'',.035,-.050,.037,INK,True,may_change=True)
             ingredients=self.label(card,'',.035,-.097,.030,(.25,.31,.26,1),may_change=True)
             sides=self.label(card,'',.035,-.145,.028,(.25,.31,.26,1),may_change=True)
@@ -101,6 +113,34 @@ class Interface:
         self.toast=self.label(self.toast_frame,'',.63,-.065,.034,WHITE,True,TextNode.ACenter,True)
         self.toast_frame.hide()
 
+        # Network chat is independent of the modal menu and does not block cooking.
+        self.chat_frame=self.frame(self.hud,-a+.07,-.38,1.35,.35,(.04,.12,.11,.90))
+        self.chat_hint=self.label(self.chat_frame,'T — ЧАТ',.04,-.055,.027,YELLOW,True,may_change=True)
+        self.chat_lines=self.label(self.chat_frame,'',.04,-.105,.028,CREAM,may_change=True)
+        self.chat_entry=self.entry(self.chat_frame,'',.04,-.305,1.25,self.game.send_chat,size=.038)
+        self.chat_entry.hide(); self.chat_frame.hide()
+
+    def show_coop_chat(self, enabled):
+        if enabled: self.chat_frame.show()
+        else:
+            self.chat_entry['focus']=0
+            self.chat_entry.hide(); self.chat_frame.hide()
+
+    def update_chat(self, messages):
+        lines=[f'{name[:16]}: {text[:48]}' for name,text in messages[-3:]]
+        self.chat_lines['text']='\n'.join(lines)
+        if self.lobby_entry is not None:
+            self.lobby_chat['text']='\n'.join(f'{name[:16]}: {text[:58]}' for name,text in messages[-5:])
+
+    def open_chat(self):
+        self.chat_entry.enterText('')
+        self.chat_entry.show(); self.chat_entry['focus']=1
+        self.chat_hint['text']='ENTER — ОТПРАВИТЬ  /  ESC — ЗАКРЫТЬ'
+
+    def close_chat(self):
+        self.chat_entry['focus']=0; self.chat_entry.hide()
+        self.chat_hint['text']='T — ЧАТ'
+
     def show_hud(self,yes):
         if yes: self.hud.show()
         else: self.hud.hide()
@@ -118,7 +158,7 @@ class Interface:
         self.time_label['text']=f'{seconds//60:02d}:{seconds%60:02d}'
         self.money_label['text']=f'$ {shift.earnings}'
         self.mission['text']='Обслужи гостей'
-        self.submission['text']=f'Выдано: {shift.served}     Ушло: {shift.lost}'
+        self.submission['text']=f'Выдано: {shift.served}  ·  Ушло: {shift.lost}  ·  Столы: {shift.dirty_tables}  ·  Мусор: {shift.trash_count}/{shift.TRASH_LIMIT}'
         self.tutorial['text']=shift.tutorial()
         for i,(card,title,ingredients,sides,bar) in enumerate(self.order_widgets):
             if i>=len(shift.orders): card.hide(); continue
@@ -129,6 +169,7 @@ class Interface:
             extra=[]
             if o.needs_fries: extra.append('фри'+(' ✓' if o.fries_done else ''))
             if o.needs_soda: extra.append('напиток'+(' ✓' if o.soda_done else ''))
+            if o.needs_coffee: extra.append('кофе'+(' ✓' if o.coffee_done else ''))
             sides['text']=(' + '.join(extra)) if extra else 'только бургер'
             bar['frameSize']=(0,.65*o.percent,-.012,0)
             bar['frameColor']=GREEN if o.percent>.4 else ORANGE
@@ -149,14 +190,14 @@ class Interface:
     def context_for(self, station, shift):
         key=station.key
         if key=='fridge': return 'E   ВЗЯТЬ КОТЛЕТУ', 'ХОЛОДИЛЬНИК  /  свежие ингредиенты'
-        if key=='grill':
-            if shift.patty:
-                p=shift.patty
-                side=f'СТОРОНЫ: {int(p.sides[0])}% / {int(p.sides[1])}%'
+        if key in ('grill_left','grill','grill_right'):
+            p=shift.patties[key]
+            if p:
+                side=f'{station.label}  ·  СТОРОНЫ: {int(p.sides[0])}% / {int(p.sides[1])}%'
                 if p.burnt: return 'E   СНЯТЬ СГОРЕВШУЮ КОТЛЕТУ',side
                 if p.ready: return 'E   СНЯТЬ КОТЛЕТУ',side+'  ·  ГОТОВО!'
                 return 'F   ПЕРЕВЕРНУТЬ КОТЛЕТУ',side+'  ·  обе стороны от 85%'
-            return 'E   ПОЛОЖИТЬ КОТЛЕТУ','ГРИЛЬ  /  сначала возьми её в холодильнике'
+            return 'E   ПОЛОЖИТЬ КОТЛЕТУ',station.label+'  /  сначала возьми её в холодильнике'
         if key=='board':
             layers=', '.join(TOPPING_NAMES.get(i,'котлета' if i=='patty' else 'булочка') for i in shift.board)
             return 'E   ДОБАВИТЬ   /   R   ЗАВЕРНУТЬ', ('НА ДОСКЕ: '+layers) if layers else 'СТОЛ СБОРКИ  /  булочка появится сама'
@@ -166,8 +207,14 @@ class Interface:
             detail=('ГОТОВНОСТЬ: '+str(int(min(200,100*shift.fryer.elapsed/shift.fryer_seconds)))+'%') if shift.fryer.active else 'Картошка жарится автоматически'
             return ('E   ВЗЯТЬ КАРТОШКУ' if status in ('ГОТОВА','СГОРЕЛА') else 'E   НАЧАТЬ ЖАРКУ'),status+'  /  '+detail
         if key=='soda': return 'E   НАЛИТЬ НАПИТОК','Газировка для заказа'
-        if key=='service': return 'E   ВЫДАТЬ ЗАКАЗ','Отдай бургер, фри и напиток по отдельности'
-        if key=='bin': return 'E   ВЫБРОСИТЬ','Убрать предмет в руках или очистить доску'
+        if key=='coffee':
+            status=shift.coffee.status(shift.coffee_seconds)
+            return ('E   ВЗЯТЬ КОФЕ' if status=='ГОТОВ' else 'E   ПРИГОТОВИТЬ КОФЕ'),status+'  /  подаётся отдельно'
+        if key=='service': return 'E   ВЫДАТЬ ЗАКАЗ','Бургер, фри и напитки выдаются по отдельности'
+        if key=='bin':
+            return ('E   ВЗЯТЬ МЕШОК' if shift.trash_count>=shift.TRASH_LIMIT else 'E   ВЫБРОСИТЬ'),f'МУСОР: {shift.trash_count}/{shift.TRASH_LIMIT}  /  Q — убрать предмет'
+        if key=='dumpster': return 'E   ВЫНЕСТИ МУСОР','Нужен полный мешок из корзины'
+        if key=='clean': return 'E   УБРАТЬ СТОЛЫ',f'Грязных столов: {shift.dirty_tables}  /  награда $2'
         return station.label,''
 
     def _darken(self):
@@ -183,11 +230,12 @@ class Interface:
         self.label(self.overlay,'SHIFT',-a+.17,.27,.19,YELLOW,True)
         self.label(self.overlay,'СИМУЛЯТОР БУРГЕРНОЙ',-a+.18,.13,.043,CREAM,True)
         self.label(self.overlay,'Жарь. Собирай. Выдавай. Не дай гостям заскучать.',-a+.18,.055,.035,MUTED)
-        self.button(self.overlay,'НАЧАТЬ СМЕНУ',-a+.18,-.075,1.38,.14,self.game.start_shift)
-        self.button(self.overlay,'КАК ИГРАТЬ',-a+.18,-.25,1.38,.12,self.guide,color=(.20,.34,.30,1),text_color=CREAM,size=.044)
-        self.button(self.overlay,'ВЫХОД',-a+.18,-.40,.67,.10,self.game.userExit,color=(.14,.25,.23,1),text_color=CREAM,size=.039)
-        self.label(self.overlay,f'ДЕНЬ {self.game.profile.day:02d}    /    БАЛАНС ${self.game.profile.bank}',-a+.18,-.69,.036,YELLOW,True)
-        self.label(self.overlay,'Одиночная игра  •  создано по мотивам Burger Shift: Team Rush',-a+.18,-.84,.028,MUTED)
+        self.button(self.overlay,'ОДИНОЧНАЯ СМЕНА',-a+.18,-.075,1.38,.13,self.game.start_shift,size=.047)
+        self.button(self.overlay,'ИГРАТЬ С ДРУЗЬЯМИ',-a+.18,-.23,1.38,.13,self.coop_setup,color=(.80,.32,.19,1),text_color=WHITE,size=.043)
+        self.button(self.overlay,'КАК ИГРАТЬ',-a+.18,-.39,1.38,.11,self.guide,color=(.20,.34,.30,1),text_color=CREAM,size=.042)
+        self.button(self.overlay,'ВЫХОД',-a+.18,-.53,.67,.10,self.game.userExit,color=(.14,.25,.23,1),text_color=CREAM,size=.039)
+        self.label(self.overlay,f'ДЕНЬ {self.game.profile.day:02d}    /    БАЛАНС ${self.game.profile.bank}',-a+.18,-.73,.036,YELLOW,True)
+        self.label(self.overlay,'Одиночная игра и кооператив  •  по мотивам Burger Shift: Team Rush',-a+.18,-.88,.026,MUTED)
         # Image is an original generated asset; it is not a screenshot of the original.
         poster_x=a-.74
         self.frame(self.overlay,poster_x-.52,.83,1.04,1.62,(.88,.72,.46,1))
@@ -196,6 +244,74 @@ class Interface:
         self._track_overlay(self.overlay, img)
         self.frame(self.overlay,poster_x-.49,-.69,.98,.12,RED)
         self.label(self.overlay,'FRESH FOOD  /  GOOD MOOD',poster_x,-.77,.032,CREAM,True,TextNode.ACenter)
+
+    def coop_setup(self, message=''):
+        self.game.mode='coop_setup'
+        self.show_hud(False); self.clear_overlay(); self._darken()
+        self.label(self.overlay,'ИГРА С ДРУЗЬЯМИ',-1.40,.76,.085,CREAM,True)
+        self.label(self.overlay,'Комната на 1–8 игроков  /  локальная сеть или прямой IP',-1.40,.66,.033,MUTED)
+        self.label(self.overlay,'ВАШЕ ИМЯ',-1.40,.53,.032,YELLOW,True)
+        self.label(self.overlay,'АДРЕС ХОСТА',-1.40,.34,.032,YELLOW,True)
+        self.label(self.overlay,'TCP-ПОРТ',-1.40,.15,.032,YELLOW,True)
+        self.label(self.overlay,'КОД КОМНАТЫ',-.65,.15,.032,YELLOW,True)
+        self.coop_entries={
+            'name':self.entry(self.overlay,self.game.coop_name,-1.39,.45,1.55),
+            'address':self.entry(self.overlay,self.game.coop_address,-1.39,.26,1.55),
+            'port':self.entry(self.overlay,str(self.game.coop_port),-1.39,.07,.60),
+            'code':self.entry(self.overlay,self.game.coop_code,-.64,.07,.80),
+        }
+        self.frame(self.overlay,.42,.55,1.05,.58,(.10,.23,.20,.98))
+        self.label(self.overlay,'СОЗДАТЬ КОМНАТУ',.47,.46,.036,CREAM,True)
+        self.label(self.overlay,'Укажите имя и порт. Хост\nполучит шестизначный код.\nДля входа нужны IP и код.',.47,.38,.031,MUTED)
+        self.label(self.overlay,'Без сервера-посредника.\nИграть только с доверенными\nучастниками.',.47,.19,.028,MUTED)
+        self.button(self.overlay,'СОЗДАТЬ',-1.40,-.11,1.32,.13,self.game.host_coop,size=.044)
+        self.button(self.overlay,'ПОДКЛЮЧИТЬСЯ',.04,-.11,1.43,.13,self.game.join_coop,color=ORANGE,text_color=WHITE,size=.041)
+        self.button(self.overlay,'НАЗАД',-1.40,-.36,.82,.11,self.game.return_menu,color=(.20,.34,.30,1),text_color=CREAM,size=.039)
+        if message:
+            self.label(self.overlay,message,-1.40,-.57,.031,ORANGE,True)
+        self.label(self.overlay,'Все участники должны использовать одну и ту же версию игры.',-1.40,-.78,.030,MUTED)
+
+    def coop_values(self):
+        return {key:entry.get() for key,entry in self.coop_entries.items()}
+
+    def connecting(self):
+        self.show_hud(False); self.clear_overlay(); self._darken()
+        self.label(self.overlay,'ПОДКЛЮЧЕНИЕ...',0,.31,.09,CREAM,True,TextNode.ACenter)
+        self.label(self.overlay,'Ожидаем ответ хоста.',0,.16,.038,MUTED,False,TextNode.ACenter)
+        self.button(self.overlay,'ОТМЕНА',-.48,-.02,.96,.12,self.game.return_menu,color=YELLOW,size=.041)
+
+    def lobby(self):
+        self.show_hud(False); self.clear_overlay(); self._darken()
+        self.label(self.overlay,'КОМНАТА',-1.40,.78,.085,CREAM,True)
+        if self.game.net_is_host:
+            self.label(self.overlay,f'КОД: {self.game.net_server.code}     ПОРТ TCP: {self.game.net_server.port}',-1.40,.64,.043,YELLOW,True)
+            self.label(self.overlay,'IP хоста: '+self.game.host_address_hint(),-1.40,.57,.031,MUTED)
+        else:
+            self.label(self.overlay,f'ХОСТ: {self.game.coop_address}:{self.game.coop_port}',-1.40,.64,.039,YELLOW,True)
+            self.label(self.overlay,'Для начала смены дождитесь хоста.',-1.40,.57,.031,MUTED)
+        self.frame(self.overlay,-1.40,.48,1.22,1.00,(.10,.23,.20,.98))
+        self.lobby_players=self.label(self.overlay,'',-1.34,.40,.039,CREAM,may_change=True)
+        self.label(self.overlay,'ЧАТ КОМАНДЫ',.02,.43,.037,YELLOW,True)
+        self.frame(self.overlay,0,.36,1.43,.59,(.10,.23,.20,.98))
+        self.lobby_chat=self.label(self.overlay,'',.04,.28,.031,CREAM,may_change=True)
+        self.lobby_entry=self.entry(self.overlay,'',.04,-.30,1.04,self.game.send_chat,size=.036)
+        self.button(self.overlay,'OK',1.13,-.27,.28,.09,
+                    lambda:self.game.send_chat(self.lobby_entry.get()),size=.030)
+        if self.game.net_is_host:
+            self.button(self.overlay,'НАЧАТЬ СМЕНУ',-1.40,-.66,1.35,.13,self.game.start_shift,size=.044)
+        else:
+            self.label(self.overlay,'Ожидаем начала смены...',-1.40,-.75,.036,MUTED)
+        self.button(self.overlay,'ПОКИНУТЬ',.03,-.66,1.10,.13,self.game.return_menu,color=(.20,.34,.30,1),text_color=CREAM,size=.041)
+        self.label(self.overlay,'Текстовый чат передаётся без шифрования. Смену нельзя поставить на паузу для всех.',-1.40,-.91,.026,MUTED)
+        self.update_lobby(self.game.net_players)
+        self.update_chat(self.game.net_chat)
+
+    def update_lobby(self, players):
+        lines=[f'{len(players)}/8 ИГРОКОВ', '']
+        for player in players:
+            marker='  ·  ХОСТ' if player.get('host') else ''
+            lines.append(f"{int(player.get('slot',0))+1}. {player.get('name','Игрок')}{marker}")
+        self.lobby_players['text']='\n'.join(lines)
 
     def guide(self):
         self.clear_overlay(); self._darken(); a=self.aspect
@@ -219,13 +335,18 @@ class Interface:
     def pause(self):
         self.clear_overlay(); self._darken()
         self.label(self.overlay,'ПАУЗА',0,.46,.13,CREAM,True,TextNode.ACenter)
-        self.label(self.overlay,'Смена подождёт. Возвращайся, когда будешь готов.',0,.33,.035,MUTED,False,TextNode.ACenter)
+        multiplayer=bool(self.game.net_client)
+        detail=('Сетевая смена продолжается для остальных игроков.' if multiplayer else
+                'Смена подождёт. Возвращайся, когда будешь готов.')
+        self.label(self.overlay,detail,0,.33,.035,MUTED,False,TextNode.ACenter)
         self.button(self.overlay,'ПРОДОЛЖИТЬ',-.72,.17,1.44,.14,self.game.resume)
-        self.button(self.overlay,'НАЧАТЬ ЗАНОВО',-.72,-.02,1.44,.12,self.game.start_shift,color=(.20,.34,.30,1),text_color=CREAM,size=.042)
-        self.button(self.overlay,'В ГЛАВНОЕ МЕНЮ',-.72,-.19,1.44,.12,self.game.return_menu,color=(.20,.34,.30,1),text_color=CREAM,size=.042)
+        if not multiplayer:
+            self.button(self.overlay,'НАЧАТЬ ЗАНОВО',-.72,-.02,1.44,.12,self.game.start_shift,color=(.20,.34,.30,1),text_color=CREAM,size=.042)
+        self.button(self.overlay,'ПОКИНУТЬ КОМНАТУ' if multiplayer else 'В ГЛАВНОЕ МЕНЮ',-.72,-.19,1.44,.12,self.game.return_menu,color=(.20,.34,.30,1),text_color=CREAM,size=.042)
 
     def summary(self):
-        self.show_hud(False); self.clear_overlay(); self._darken(); s=self.game.shift; p=self.game.profile
+        self.show_hud(False); self.clear_overlay(); self._darken(); s=self.game.shift; p=s.profile
+        can_buy=not self.game.net_client or self.game.net_is_host
         self.label(self.overlay,'СМЕНА ЗАКОНЧЕНА',-1.48,.73,.082,CREAM,True)
         self.label(self.overlay,'Хорошая работа. Самое время улучшить кухню.',-1.48,.62,.038,MUTED)
         for i,(value,caption) in enumerate([(f'{s.served}','ВЫДАНО'),(f'{s.lost}','УШЛО'),(f'${s.earnings}','ЗАРАБОТАНО'),(f'${p.bank}','БАЛАНС')]):
@@ -241,9 +362,15 @@ class Interface:
             self.label(self.overlay,f'{title}  {level}/3',-1.42,z-.052,.036,CREAM,True)
             self.label(self.overlay,desc,-1.42,z-.102,.028,MUTED)
             label='МАКС.' if level>=3 else f'${p.upgrade_cost(key)}'
-            self.button(self.overlay,label,.59,z-.024,.57,.09,lambda k=key:self.game.buy_upgrade(k),
-                        color=YELLOW if level<3 and p.bank>=p.upgrade_cost(key) else (.30,.37,.32,1),
-                        text_color=INK if level<3 and p.bank>=p.upgrade_cost(key) else MUTED,size=.032)
-        self.button(self.overlay,'СЛЕДУЮЩИЙ ДЕНЬ',-1.48,-.58,1.48,.13,self.game.start_shift,size=.045)
+            if can_buy:
+                self.button(self.overlay,label,.59,z-.024,.57,.09,lambda k=key:self.game.buy_upgrade(k),
+                            color=YELLOW if level<3 and p.bank>=p.upgrade_cost(key) else (.30,.37,.32,1),
+                            text_color=INK if level<3 and p.bank>=p.upgrade_cost(key) else MUTED,size=.032)
+            else:
+                self.label(self.overlay,label,.73,z-.085,.030,MUTED,True)
+        if can_buy:
+            self.button(self.overlay,'СЛЕДУЮЩИЙ ДЕНЬ',-1.48,-.58,1.48,.13,self.game.start_shift,size=.045)
+        else:
+            self.label(self.overlay,'Ждём следующей смены от хоста',-1.48,-.67,.033,YELLOW)
         self.button(self.overlay,'В МЕНЮ',.07,-.58,1.17,.13,self.game.return_menu,color=(.20,.34,.30,1),text_color=CREAM,size=.042)
-        self.label(self.overlay,'Прогресс сохраняется автоматически.',-1.48,-.84,.030,MUTED)
+        self.label(self.overlay,'Прогресс сохраняется у хоста.' if self.game.net_client else 'Прогресс сохраняется автоматически.',-1.48,-.84,.030,MUTED)
