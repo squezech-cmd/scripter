@@ -132,6 +132,7 @@ function navigate(tab, raw){
     tab.internal.style.display = 'none';
     tab.iframe.style.display = '';
     tab.title = hostname(url);
+    pushHist(tab, url);
     showProgress(true);
     tab.iframe.src = url;
   }
@@ -440,6 +441,11 @@ async function aiSend(text){
 }
 
 // ---------- события хрома ----------
+function openExternal(url){
+  if(window.blackOpenExternal) window.blackOpenExternal(url).catch(() => alert('Не удалось открыть страницу.'));
+  else window.open(url, '_blank', 'noopener');
+}
+
 function bind(){
   $('#newTab').addEventListener('click', () => createTab('browser://start'));
   $('#back').addEventListener('click', () => go(activeTab(), -1));
@@ -481,10 +487,10 @@ function bind(){
   }));
   $('#openExternal').addEventListener('click', () => {
     const t = activeTab();
-    if(t.kind === 'web') window.open(t.url, '_blank', 'noopener');
+    if(t.kind === 'web') openExternal(t.url);
     $('#menu').hidden = true;
   });
-  $('#hintOpen').addEventListener('click', () => window.open(activeTab().url, '_blank', 'noopener'));
+  $('#hintOpen').addEventListener('click', () => openExternal(activeTab().url));
   $('#hintHide').addEventListener('click', () => { activeTab().hintOff = true; syncChrome(); });
 
   document.addEventListener('keydown', e => {
