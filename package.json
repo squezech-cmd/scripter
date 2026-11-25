@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node scripts/serve.mjs",
+    "browser": "node browser/server.mjs",
     "test": "node test/harness.mjs"
   },
   "devDependencies": {

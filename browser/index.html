@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="BLACK — лёгкий чёрный браузер с ИИ-помощником. Без фреймворков и лишнего веса.">
+<title>BLACK — чёрный браузер</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <header id="bar">
+    <div id="tabs" role="tablist" aria-label="Вкладки"></div>
+    <button id="newTab" class="icon" title="Новая вкладка — Ctrl+T">＋</button>
+
+    <nav id="nav" aria-label="Навигация">
+      <button id="back" class="icon" title="Назад — Alt+←">←</button>
+      <button id="fwd" class="icon" title="Вперёд — Alt+→">→</button>
+      <button id="reload" class="icon" title="Обновить — Ctrl+R">⟳</button>
+      <button id="home" class="icon" title="Стартовая страница">⌂</button>
+    </nav>
+
+    <div id="omnibox">
+      <span id="scheme" title="Соединение">●</span>
+      <input id="url" list="suggest" placeholder="Адрес или поисковый запрос…"
+             autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Адресная строка">
+      <datalist id="suggest"></datalist>
+      <button id="go" class="icon" title="Перейти — Enter">→</button>
+      <button id="star" class="icon" title="В закладки / убрать">☆</button>
+    </div>
+
+    <button id="aiBtn" title="ИИ-помощник — Ctrl+K">✦<span>ИИ</span></button>
+
+    <div id="menuWrap">
+      <button id="menuBtn" class="icon" title="Меню">☰</button>
+      <div id="menu" hidden>
+        <button data-go="browser://start">⌂&nbsp; Стартовая</button>
+        <button data-go="browser://history">🕘&nbsp; История</button>
+        <button data-go="browser://bookmarks">★&nbsp; Закладки</button>
+        <button data-go="browser://settings">⚙&nbsp; Настройки</button>
+        <button data-go="browser://help">?&nbsp; Справка</button>
+        <hr>
+        <button id="openExternal">↗&nbsp; Открыть страницу внешне</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="bmarks" hidden></div>
+  <div id="progress" hidden></div>
+
+  <main id="view">
+    <div id="hint" hidden>
+      <span>Страница не открылась? Некоторые сайты запрещают встраивание в браузеры.</span>
+      <button id="hintOpen">↗ Открыть внешне</button>
+      <button id="hintHide" title="Скрыть">✕</button>
+    </div>
+    <div id="pages"></div>
+  </main>
+
+  <aside id="ai" hidden aria-label="ИИ-помощник">
+    <header>
+      <div><b>✦ НОЧЬ</b><small>локальный ИИ · 0 трафика · 0 моделей</small></div>
+      <button id="aiClose" class="icon" title="Закрыть — Ctrl+K">✕</button>
+    </header>
+    <div id="aiLog"></div>
+    <div id="aiChips"></div>
+    <form id="aiForm">
+      <input id="aiInput" placeholder="Спроси что-нибудь… «что ты умеешь?»" autocomplete="off" aria-label="Сообщение помощнику">
+      <button type="submit" title="Отправить">➤</button>
+    </form>
+  </aside>
+
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
