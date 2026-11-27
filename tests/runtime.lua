@@ -2,7 +2,13 @@
 -- No Windows DLL is loaded and no real process memory is accessed.
 local ffi = require 'ffi'
 local bit = require 'bit'
-local click, selectPage, checkbox, changeSlider, openedPopup
+local click, selectPage, checkbox, changeSlider, changeColor, openedPopup
+local windows, itemIds, styleDepth = {}, {}, 0
+local function widget(label)
+    local id = table.concat(windows, '/') .. '/' .. label
+    assert(not itemIds[id], 'Duplicate widget ID: ' .. id)
+    itemIds[id] = true
+end
 local frames, initializers, commands, files = {}, {}, {}, {}
 local scriptVersion, lastChatMessage
 local dpiCalls, fontLoads = 0, 0
@@ -61,33 +67,66 @@ local I = {
     IsWindowHovered = function() return true end,
     IsMouseDragging = function() return false end,
     U32 = function() return 0 end,
-    Begin = function() return true end, BeginChild = function() return true end,
-    BeginCombo = function() return true end,
+    Begin = function(name) windows[#windows + 1] = name; return true end,
+    BeginChild = function(name) windows[#windows + 1] = name; return true end,
+    BeginCombo = function(label) widget(label); windows[#windows + 1] = label; return true end,
     OpenPopup = function(name) openedPopup = name end,
-    BeginPopup = function(name) return openedPopup == name end,
+    BeginPopup = function(name)
+        if openedPopup ~= name then return false end
+        windows[#windows + 1] = name; return true
+    end,
     CloseCurrentPopup = function() openedPopup = nil end,
     Button = function(label)
-        if click == label then click = nil; return true end
+        widget(label)
+        if click and (click == label or (not click:find('##', 1, true) and click == label:match('^(.-)##'))) then
+            click = nil; return true
+        end
         return false
     end,
     Selectable = function(label)
+        widget(label)
         if selectPage == label then selectPage = nil; return true end
         return false
     end,
     Checkbox = function(label, value)
+        widget(label)
         if checkbox == label then checkbox = nil; value[0] = not value[0]; return true end
         return false
     end,
     SliderInt = function(label, value)
+        widget(label)
         if changeSlider and changeSlider.label == label then value[0] = changeSlider.value; changeSlider = nil; return true end
         return false
     end,
-    SliderFloat = function() return false end,
-    ColorEdit3 = function(label, arr) assert(ffi.sizeof(arr) == 12); return false end,
-    ColorEdit4 = function(label, arr) assert(ffi.sizeof(arr) == 16); return false end,
+    ColorEdit3 = function(label, arr)
+        widget(label); assert(ffi.sizeof(arr) == 12)
+        if changeColor and changeColor.label == label then
+            for i = 1, 3 do arr[i - 1] = changeColor.value[i] end
+            changeColor = nil; return true
+        end
+        return false
+    end,
+    ColorEdit4 = function(label, arr)
+        widget(label); assert(ffi.sizeof(arr) == 16)
+        if changeColor and changeColor.label == label then
+            for i = 1, 4 do arr[i - 1] = changeColor.value[i] end
+            changeColor = nil; return true
+        end
+        return false
+    end,
 }
-for name in ('SetDpiScalingMode Text TextWrapped TextColored Spacing Separator SameLine PushID PopID EndCombo EndPopup SetNextWindowSize SetNextWindowPos SetNextWindowSizeConstraints EndChild End PushItemWidth PopItemWidth SetNextWindowBgAlpha PushStyleVar PopStyleVar SetWindowFontScale Dummy'):gmatch('%S+') do I[name] = function() end end
--- The user's log reports exactly this missing API (also absent in mimgui 1.7.0).
+for name in ('SetDpiScalingMode Text TextWrapped TextColored Spacing Separator SameLine PopID EndCombo EndPopup SetNextWindowSize SetNextWindowPos SetNextWindowSizeConstraints EndChild End PushItemWidth PopItemWidth SetNextWindowBgAlpha PushStyleVarVec2 PopStyleVar SetWindowFontScale Dummy'):gmatch('%S+') do I[name] = function() end end
+I.SliderFloat = I.SliderInt
+local function endWindow() assert(#windows > 0); table.remove(windows) end
+I.End, I.EndChild, I.EndPopup, I.EndCombo = endWindow, endWindow, endWindow, endWindow
+I.PushStyleVarVec2 = function(_, value)
+    assert(value.x ~= nil and value.y ~= nil)
+    styleDepth = styleDepth + 1
+end
+I.PopStyleVar = function(count)
+    styleDepth = styleDepth - (count or 1); assert(styleDepth >= 0)
+end
+-- The user's logs report absent optional APIs; generic overloads are never mocked.
 local absent = {}
 I.SetDpiScalingMode = function(value) assert(value == 0); dpiCalls = dpiCalls + 1 end
 if TEST_LEGACY_MIMGUI then
@@ -164,15 +203,19 @@ if TEST_REQUIRE_ERROR then
     return
 end
 dofile('zews.lua')
-assert(scriptVersion == '1.0.1')
-assert(dpiCalls == (TEST_LEGACY_MIMGUI and 0 or 1))
+assert(scriptVersion == '1.0.2')
+assert(dpiCalls == 0, 'ZEWS must not reconfigure mimgui DPI')
 assert(#frames == 2 and frames[1].LockPlayer == true and frames[2].HideCursor == true)
 local co = coroutine.create(main)
 local function tick()
     local ok, err = coroutine.resume(co); assert(ok, err)
 end
 local function render()
-    for _, frame in ipairs(frames) do if frame.condition() then frame.draw() end end
+    itemIds = {}
+    for _, frame in ipairs(frames) do
+        if frame.condition() then frame.draw() end
+        assert(#windows == 0 and styleDepth == 0, 'Unbalanced window/style stack')
+    end
 end
 local function press(label) click = label; render(); assert(click == nil, 'button not drawn: ' .. label); tick() end
 local function page(label) selectPage = label; render(); assert(selectPage == nil); tick() end
@@ -181,10 +224,9 @@ local function eq(a,b) assert(a==b, tostring(a)..' ~= '..tostring(b)) end
 
 tick(); eq(writeCount, 0); assert(commands.zews)
 for _, f in ipairs(initializers) do f() end
-assert(fontLoads == ((TEST_FONT_PRESENT and not TEST_FONT_ERROR) and 1 or 0))
-assert((ioState.FontDefault ~= nil) == (fontLoads > 0))
+assert(fontLoads == 0 and ioState.FontDefault == nil, 'ZEWS must keep the existing font')
 if signature == 0x53EC8B55 or signature == 0x16197BE9 then
-    assert(lastChatMessage:find('1.0.1', 1, true))
+    assert(lastChatMessage:find('1.0.2', 1, true))
 end
 commands.zews(); assert(frames[1].condition()); render(); tick()
 eq(writeCount, 0) -- opening the menu has no game-side effect
@@ -200,6 +242,17 @@ end
 assert(writeCount > 0); eq(hour,12); eq(minute,0); eq(memoryData[0xC81318],1)
 eq(read(0xB7B1D0,2),1000); eq(read(0xB7B1D0 + 183*2,2),1000)
 eq(read(0xB7BF78,1),51)
+-- Exercise individual controls, not just preset writes.
+page('03   Графика'); toggle('##graphics_shadows')
+changeSlider = {label='Интенсивность теней', value=70}; render(); tick()
+eq(read(0xB7B4B0,1),70); toggle('##graphics_shadows'); eq(read(0xB7B4B0,1),42)
+toggle('##graphics_sunSize')
+changeSlider = {label='Размер солнца', value=2.5}; render(); tick()
+eq(read(0xB7B6D8,1),25); toggle('##graphics_sunSize')
+page('05   Таймцикл'); toggle('##cycle_water')
+changeColor = {label='Вода · цвет и прозрачность', value={0.2,0.4,0.6,0.8}}; render(); tick()
+eq(read(0xB7AAA0,1),51); eq(read(0xB7A9E8,1),102); eq(read(0xB7A930,1),153); eq(read(0xB7A878,1),204)
+toggle('##cycle_water'); eq(read(0xB7AAA0,1),42)
 -- Manual save + rotation; slots save deep copies and restore settings.
 press('Сохранить'); assert(files['MOONLOADER\\config\\zews.json'])
 page('06   Профили'); press('Сохранить в слот'); press('Да, сохранить')
@@ -207,6 +260,18 @@ assert(files['MOONLOADER\\config\\zews.json.bak']); eq(lastSaved.profiles['1'].w
 page('04   Время / погода')
 changeSlider = {label='Часы',value=18}; render(); tick(); eq(hour,18)
 page('06   Профили'); press('Загрузить'); eq(hour,12)
+-- All slots need unique IDs and independent confirmation popups without PushID.
+for i = 2, 3 do
+    page('04   Время / погода')
+    changeSlider = {label='Часы',value=18+i}; render(); tick()
+    page('06   Профили'); press('Сохранить в слот##saveSlot' .. i)
+    press('Да, сохранить##confirmSlot' .. i)
+    eq(lastSaved.profiles[tostring(i)].world.hour,18+i)
+end
+press('Загрузить##loadSlot1'); eq(hour,12)
+press('Загрузить##loadSlot2'); eq(hour,20)
+press('Загрузить##loadSlot3'); eq(hour,21)
+press('Загрузить##loadSlot1'); eq(hour,12)
 -- HUD visibility, overlay render, save and shutdown restoration.
 page('02   HUD'); toggle('Свой HUD'); toggle('Скрывать стандартный HUD GTA'); toggle('Скрывать радар')
 render(); eq(memoryData[0xBAA45D],0); eq(memoryData[0xBAA3FB],1)

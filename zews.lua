@@ -167,7 +167,7 @@ end
 -- Allows headless tests without loading MoonLoader, FFI or game memory.
 if rawget(_G, 'ZEWS_TEST') then return Core end
 
-local VERSION = '1.0.1'
+local VERSION = '1.0.2'
 script_name('ZEWS Visual Studio')
 script_author('ZEWS')
 script_version(VERSION)
@@ -179,11 +179,9 @@ if not ok then
 end
 local memory = require 'memory'
 local bit = require 'bit'
--- This optional API is absent in mimgui 1.7.0 and some existing game builds.
--- Keep that library's default DPI mode when it is unavailable.
-if imgui.SetDpiScalingMode then imgui.SetDpiScalingMode(0) end
+-- Use the library's default font and DPI settings. No custom font builders,
+-- DPI helpers or overloaded PushID calls are needed to open the menu.
 local new = imgui.new
-local glyphRanges -- Font atlas retains this memory until the renderer is destroyed.
 local open = new.bool(false)
 local editingHud = false
 local tab = 1
@@ -379,10 +377,8 @@ local function drawOverview()
         {'soft', '04 / SOFT HAZE', 'Пасмурное утро, лёгкая дымка и мягкие тени.'},
     }
     for _, p in ipairs(presets) do
-        imgui.PushID(p[1])
         if button(p[2], 210) then preset(p[1]) end
         imgui.TextWrapped(p[3]); imgui.Spacing()
-        imgui.PopID()
     end
     imgui.Separator(); imgui.Spacing()
     paragraph('Пресеты заменяют только время, погоду, графику и палитру. Твой HUD и пользовательские профили сохраняются.')
@@ -413,11 +409,9 @@ end
 local function drawGraphics()
     heading('GRAPHICS / штатный рендер', 'Галочка включает переопределение параметра. Без галочки используются исходные таблицы твоей сборки.')
     for _, spec in ipairs(Core.scalars) do
-        imgui.PushID(spec.key)
         local v = cfg.graphics[spec.key]
-        check('##enabled', v, 'enabled'); imgui.SameLine()
+        check('##graphics_' .. spec.key, v, 'enabled'); imgui.SameLine()
         slider(spec.label, v, 'value', spec.min, spec.max, spec.factor == 1)
-        imgui.PopID()
     end
     imgui.Spacing(); imgui.Separator(); imgui.Spacing()
     paragraph('Большая дальность может снизить FPS и не увеличивает серверную дистанцию стриминга. Туман автоматически ограничивается дальностью, если включены оба параметра.')
@@ -454,11 +448,9 @@ end
 local function drawCycle()
     heading('TIMECYCLE / палитра мира', 'Независимые RGB/RGBA-переопределения. Выбранный цвет записывается во все 184 слота времени и погоды, а не только в текущий час.')
     for _, group in ipairs(Core.groups) do
-        imgui.PushID(group.key)
         local v = cfg.cycle[group.key]
-        check('##enabled', v, 'enabled'); imgui.SameLine()
+        check('##cycle_' .. group.key, v, 'enabled'); imgui.SameLine()
         colorEdit(group.label, v, 'color')
-        imgui.PopID()
     end
     imgui.Spacing(); imgui.Separator(); imgui.Spacing()
     paragraph('Альфа воды и color filter — параметры движка, а не прозрачность всего экрана. Вид фильтров зависит от активного post-processing и установленных модов.')
@@ -474,22 +466,23 @@ local function drawProfiles()
     imgui.Spacing()
     for i = 1, 3 do
         local key = tostring(i)
-        imgui.PushID(i)
+        local popup = 'saveSlot' .. key
         imgui.Text(('ПРОФИЛЬ %02d · %s'):format(i, profiles[key] and 'сохранён' or 'пусто'))
-        if button(profiles[key] and 'Перезаписать слот' or 'Сохранить в слот', 180) then
-            imgui.OpenPopup('saveSlot')
-        end
-        if imgui.BeginPopup('saveSlot') then
+        local label = profiles[key] and 'Перезаписать слот' or 'Сохранить в слот'
+        if button(label .. '##saveSlot' .. key, 180) then imgui.OpenPopup(popup) end
+        if imgui.BeginPopup(popup) then
             imgui.Text('Записать текущие настройки в этот слот?')
-            if button('Да, сохранить') then profiles[key] = Core.copy(cfg); mark(); save(); imgui.CloseCurrentPopup() end
+            if button('Да, сохранить##confirmSlot' .. key) then
+                profiles[key] = Core.copy(cfg); mark(); save(); imgui.CloseCurrentPopup()
+            end
             imgui.EndPopup()
         end
         imgui.SameLine()
-        if button('Загрузить', 120) then
+        if button('Загрузить##loadSlot' .. key, 120) then
             if profiles[key] then cfg = Core.sanitize(profiles[key]); mark(); notify('Загружен профиль ' .. key)
             else notify('Этот слот пока пуст.') end
         end
-        imgui.Spacing(); imgui.PopID()
+        imgui.Spacing()
     end
     imgui.Separator(); imgui.Spacing()
     if button('Сбросить настройки ZEWS', 260) then imgui.OpenPopup('reset') end
@@ -502,27 +495,8 @@ local function drawProfiles()
     paragraph('Зависимости: MoonLoader 0.26+, mimgui, SA:MP. Адресные функции рассчитаны только на GTA SA 1.0 US Compact/Hoodlum. На другой версии запись в память заблокирована.')
 end
 
-local function loadOptionalFont()
-    local fontPath = getFolderPath(0x14) .. '\\tahoma.ttf'
-    if not doesFileExist(fontPath) then return end
-    local io = imgui.GetIO()
-    local ranges = io.Fonts:GetGlyphRangesCyrillic()
-    if imgui.ImFontGlyphRangesBuilder and imgui.ImVector_ImWchar then
-        local builder = imgui.ImFontGlyphRangesBuilder()
-        builder:AddRanges(ranges)
-        builder:AddText('·—–…')
-        glyphRanges = imgui.ImVector_ImWchar()
-        builder:BuildRanges(glyphRanges)
-        ranges = glyphRanges[0].Data
-    end
-    local font = io.Fonts:AddFontFromFileTTF(fontPath, 16, nil, ranges)
-    if font ~= nil then io.FontDefault = font end
-end
 imgui.OnInitialize(function()
     imgui.GetIO().IniFilename = nil
-    -- A custom font is cosmetic. Keep mimgui's working default on font errors.
-    local fontOk, fontError = pcall(loadOptionalFont)
-    if not fontOk then print('[ZEWS] Default mimgui font retained: ' .. tostring(fontError)) end
     local s = imgui.GetStyle()
     s.WindowRounding, s.ChildRounding, s.FrameRounding = 14, 10, 6
     s.PopupRounding, s.GrabRounding, s.ScrollbarRounding = 8, 6, 8
@@ -622,8 +596,9 @@ end, function()
         imgui.WindowFlags.NoScrollbar, imgui.WindowFlags.NoSavedSettings, imgui.WindowFlags.NoCollapse,
         imgui.WindowFlags.NoMove, imgui.WindowFlags.NoFocusOnAppearing, imgui.WindowFlags.NoBringToFrontOnFocus)
     if not (editingHud and open[0]) then flags = bit.bor(flags, imgui.WindowFlags.NoInputs) end
-    imgui.PushStyleVar(imgui.StyleVar.WindowPadding, imgui.ImVec2(14 * scale, 10 * scale))
-    imgui.PushStyleVar(imgui.StyleVar.ItemSpacing, imgui.ImVec2(8 * scale, 5 * scale))
+    -- mimgui exposes the ImVec2 overload by this exact name, not PushStyleVar.
+    imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, imgui.ImVec2(14 * scale, 10 * scale))
+    imgui.PushStyleVarVec2(imgui.StyleVar.ItemSpacing, imgui.ImVec2(8 * scale, 5 * scale))
     imgui.Begin('##zewsHud', nil, flags)
     imgui.SetWindowFontScale(scale)
     imgui.TextColored(imgui.ImVec4(h.accent[1], h.accent[2], h.accent[3], h.accent[4]), editingHud and 'ZEWS / ПЕРЕТАЩИ МЕНЯ' or 'Z E W S  /  HUD')
