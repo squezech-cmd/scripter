@@ -167,18 +167,21 @@ end
 -- Allows headless tests without loading MoonLoader, FFI or game memory.
 if rawget(_G, 'ZEWS_TEST') then return Core end
 
+local VERSION = '1.0.1'
 script_name('ZEWS Visual Studio')
 script_author('ZEWS')
-script_version('1.0.0')
+script_version(VERSION)
 script_description('HUD, graphics and timecycle editor. Open: /zews')
 require 'lib.moonloader'
 local ok, imgui = pcall(require, 'mimgui')
-if not ok then error('ZEWS: mimgui is required. Install THE-FYP/mimgui into moonloader/lib.') end
-local ffi = require 'ffi'
+if not ok then
+    error('ZEWS: mimgui could not be loaded. Check moonloader/lib/mimgui.\nOriginal error: ' .. tostring(imgui))
+end
 local memory = require 'memory'
 local bit = require 'bit'
--- Keep pixel-based HUD positioning predictable; the HUD has its own scale slider.
-imgui.SetDpiScalingMode(0)
+-- This optional API is absent in mimgui 1.7.0 and some existing game builds.
+-- Keep that library's default DPI mode when it is unavailable.
+if imgui.SetDpiScalingMode then imgui.SetDpiScalingMode(0) end
 local new = imgui.new
 local glyphRanges -- Font atlas retains this memory until the renderer is destroyed.
 local open = new.bool(false)
@@ -499,18 +502,27 @@ local function drawProfiles()
     paragraph('Зависимости: MoonLoader 0.26+, mimgui, SA:MP. Адресные функции рассчитаны только на GTA SA 1.0 US Compact/Hoodlum. На другой версии запись в память заблокирована.')
 end
 
-imgui.OnInitialize(function()
-    imgui.GetIO().IniFilename = nil
+local function loadOptionalFont()
     local fontPath = getFolderPath(0x14) .. '\\tahoma.ttf'
-    if doesFileExist(fontPath) then
+    if not doesFileExist(fontPath) then return end
+    local io = imgui.GetIO()
+    local ranges = io.Fonts:GetGlyphRangesCyrillic()
+    if imgui.ImFontGlyphRangesBuilder and imgui.ImVector_ImWchar then
         local builder = imgui.ImFontGlyphRangesBuilder()
-        builder:AddRanges(imgui.GetIO().Fonts:GetGlyphRangesCyrillic())
+        builder:AddRanges(ranges)
         builder:AddText('·—–…')
         glyphRanges = imgui.ImVector_ImWchar()
         builder:BuildRanges(glyphRanges)
-        local font = imgui.GetIO().Fonts:AddFontFromFileTTF(fontPath, 16, nil, glyphRanges[0].Data)
-        if font ~= nil then imgui.GetIO().FontDefault = font end
+        ranges = glyphRanges[0].Data
     end
+    local font = io.Fonts:AddFontFromFileTTF(fontPath, 16, nil, ranges)
+    if font ~= nil then io.FontDefault = font end
+end
+imgui.OnInitialize(function()
+    imgui.GetIO().IniFilename = nil
+    -- A custom font is cosmetic. Keep mimgui's working default on font errors.
+    local fontOk, fontError = pcall(loadOptionalFont)
+    if not fontOk then print('[ZEWS] Default mimgui font retained: ' .. tostring(fontError)) end
     local s = imgui.GetStyle()
     s.WindowRounding, s.ChildRounding, s.FrameRounding = 14, 10, 6
     s.PopupRounding, s.GrabRounding, s.ScrollbarRounding = 8, 6, 8
@@ -549,7 +561,7 @@ imgui.OnFrame(function() return ready and open[0] end, function()
     imgui.SetNextWindowSizeConstraints(imgui.ImVec2(math.min(680, sw - 20), math.min(440, sh - 20)), imgui.ImVec2(sw - 10, sh - 10))
     if imgui.Begin('ZEWS / Visual Studio', open, bit.bor(imgui.WindowFlags.NoCollapse, imgui.WindowFlags.NoSavedSettings)) then
         imgui.TextColored(imgui.ImVec4(0.58, 0.72, 1, 1), 'Z E W S')
-        imgui.SameLine(); muted('VISUAL STUDIO  /  1.0')
+        imgui.SameLine(); muted('VISUAL STUDIO  /  ' .. VERSION)
         imgui.Separator(); imgui.Spacing()
         if not supported then
             imgui.TextColored(imgui.ImVec4(1, 0.65, 0.36, 1), 'Версия GTA не распознана. Применение настроек заблокировано.')
@@ -582,7 +594,14 @@ end).LockPlayer = true
 
 -- HUD uses a separate, input-transparent ImGui frame. Position is normalized
 -- against free screen space, keeping it visible on different resolutions.
-local function packed(c) return imgui.U32(c[1], c[2], c[3], c[4] or 1) end
+local function packed(c)
+    -- ImDrawList expects ImU32 (ABGR), not an optional mimgui convenience helper.
+    local r = math.floor(c[1] * 255 + 0.5)
+    local g = math.floor(c[2] * 255 + 0.5)
+    local b = math.floor(c[3] * 255 + 0.5)
+    local a = math.floor((c[4] or 1) * 255 + 0.5)
+    return r + g * 256 + b * 65536 + a * 16777216
+end
 imgui.OnFrame(function()
     return ready and supported and cfg.enabled and cfg.hud.custom and doesCharExist(PLAYER_PED)
         and not isPauseMenuActive() and not sampIsScoreboardOpen()
@@ -648,7 +667,7 @@ function main()
         if not open[0] then editingHud = false end
     end)
     ready = true
-    sampAddChatMessage('[ZEWS] Visual Studio loaded. Open: /zews', 0x8EADFF)
+    sampAddChatMessage('[ZEWS] Visual Studio ' .. VERSION .. ' loaded. Open: /zews', 0x8EADFF)
     if not supported then sampAddChatMessage('[ZEWS] Unsupported GTA version. Memory writes disabled (requires 1.0 US).', 0xFFB070) end
     while true do
         wait(0)

@@ -4,6 +4,8 @@ local ffi = require 'ffi'
 local bit = require 'bit'
 local click, selectPage, checkbox, changeSlider, openedPopup
 local frames, initializers, commands, files = {}, {}, {}, {}
+local scriptVersion, lastChatMessage
+local dpiCalls, fontLoads = 0, 0
 local clock, hour, minute, timeCalls, weatherCalls = 0, 8, 35, 0, 0
 local memoryData, writeCount = {}, 0
 local signature = TEST_SIGNATURE or 0x53EC8B55
@@ -21,7 +23,11 @@ local function enum(names)
 end
 local ioState = {MouseDelta = {x = 5, y = 3}, Fonts = {
     GetGlyphRangesCyrillic = function() return {} end,
-    AddFontFromFileTTF = function() return {} end}}
+    AddFontFromFileTTF = function()
+        if TEST_FONT_ERROR then error('test: Tahoma could not be loaded') end
+        fontLoads = fontLoads + 1
+        return {}
+    end}}
 local style = {Colors = {}}
 local I = {
     WindowFlags = enum('NoCollapse NoSavedSettings NoTitleBar NoResize NoScrollbar NoMove NoFocusOnAppearing NoBringToFrontOnFocus NoInputs'),
@@ -45,7 +51,13 @@ local I = {
     OnFrame = function(cond, draw) local f = {condition = cond, draw = draw}; frames[#frames+1] = f; return f end,
     GetContentRegionAvail = function() return {x=600,y=500} end,
     GetCursorScreenPos = function() return {x=0,y=0} end,
-    GetWindowDrawList = function() return {AddRectFilled = function() end} end,
+    GetWindowDrawList = function()
+        return {AddRectFilled = function(_, p1, p2, rgba)
+            assert(type(rgba) == 'number' and rgba >= 0 and rgba <= 4294967295)
+            assert(rgba == math.floor(rgba), 'ImU32 color must be an integer')
+            assert(p2.x >= p1.x and p2.y >= p1.y, 'HUD bar inverted')
+        end}
+    end,
     IsWindowHovered = function() return true end,
     IsMouseDragging = function() return false end,
     U32 = function() return 0 end,
@@ -75,9 +87,26 @@ local I = {
     ColorEdit4 = function(label, arr) assert(ffi.sizeof(arr) == 16); return false end,
 }
 for name in ('SetDpiScalingMode Text TextWrapped TextColored Spacing Separator SameLine PushID PopID EndCombo EndPopup SetNextWindowSize SetNextWindowPos SetNextWindowSizeConstraints EndChild End PushItemWidth PopItemWidth SetNextWindowBgAlpha PushStyleVar PopStyleVar SetWindowFontScale Dummy'):gmatch('%S+') do I[name] = function() end end
-setmetatable(I, {__index = function(_, k) error('Unexpected ImGui API: ' .. k) end})
+-- The user's log reports exactly this missing API (also absent in mimgui 1.7.0).
+local absent = {}
+I.SetDpiScalingMode = function(value) assert(value == 0); dpiCalls = dpiCalls + 1 end
+if TEST_LEGACY_MIMGUI then
+    absent.SetDpiScalingMode = true
+    I.SetDpiScalingMode = nil
+end
+if TEST_MINIMAL_MIMGUI then
+    for _, name in ipairs({'ImFontGlyphRangesBuilder', 'ImVector_ImWchar', 'U32'}) do
+        absent[name] = true; I[name] = nil
+    end
+end
+setmetatable(I, {__index = function(_, k)
+    if absent[k] then return nil end
+    error('Unexpected ImGui API: ' .. k)
+end})
 package.preload['mimgui'] = function() return I end
-function script_name() end; function script_author() end; function script_version() end; function script_description() end
+function script_name() end; function script_author() end
+function script_version(v) scriptVersion = v end
+function script_description() end
 function getWorkingDirectory() return 'MOONLOADER' end
 function getGameTimer() return clock end
 function getFolderPath() return 'FONT' end
@@ -86,7 +115,7 @@ function doesDirectoryExist() return true end
 function isSampLoaded() return true end
 function isSampAvailable() return true end
 function sampRegisterChatCommand(name, fn) commands[name] = fn end
-function sampAddChatMessage() end
+function sampAddChatMessage(text) lastChatMessage = text end
 function getTimeOfDay() return hour, minute end
 function setTimeOfDay(h, m) hour = h; minute = m; timeCalls = timeCalls + 1 end
 function forceWeatherNow(w) memoryData[0xC81318] = w; memoryData[0xC8131C] = w; memoryData[0xC81320] = w; weatherCalls = weatherCalls + 1 end
@@ -126,7 +155,17 @@ os.rename = function(a, b)
     files[b], files[a] = files[a], nil; return true
 end
 
+if TEST_REQUIRE_ERROR then
+    package.preload['mimgui'] = function() error('test: missing cimguidx9 DLL') end
+    local success, failure = pcall(dofile, 'zews.lua')
+    assert(not success and tostring(failure):find('missing cimguidx9 DLL', 1, true))
+    assert(#frames == 0 and writeCount == 0)
+    print('PASS: dependency-load error retains original diagnostic')
+    return
+end
 dofile('zews.lua')
+assert(scriptVersion == '1.0.1')
+assert(dpiCalls == (TEST_LEGACY_MIMGUI and 0 or 1))
 assert(#frames == 2 and frames[1].LockPlayer == true and frames[2].HideCursor == true)
 local co = coroutine.create(main)
 local function tick()
@@ -142,6 +181,11 @@ local function eq(a,b) assert(a==b, tostring(a)..' ~= '..tostring(b)) end
 
 tick(); eq(writeCount, 0); assert(commands.zews)
 for _, f in ipairs(initializers) do f() end
+assert(fontLoads == ((TEST_FONT_PRESENT and not TEST_FONT_ERROR) and 1 or 0))
+assert((ioState.FontDefault ~= nil) == (fontLoads > 0))
+if signature == 0x53EC8B55 or signature == 0x16197BE9 then
+    assert(lastChatMessage:find('1.0.1', 1, true))
+end
 commands.zews(); assert(frames[1].condition()); render(); tick()
 eq(writeCount, 0) -- opening the menu has no game-side effect
 -- Exercise every tab and its real FFI controls.
